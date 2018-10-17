@@ -35,8 +35,12 @@ func TestAutoRenewLockBehavior_Fail(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	ctxWasCancelled := false
 	lockInstance := &Lock{
-		ctx:     ctx,
+		ctx: ctx,
+		Cancel: func() {
+			ctxWasCancelled = true
+		},
 		LockTTL: time.Duration(time.Second * 1),
 		Renew: func() error {
 			return fmt.Errorf("Simulated error")
@@ -52,15 +56,57 @@ func TestAutoRenewLockBehavior_Fail(t *testing.T) {
 	case <-time.Tick(time.Second * 2):
 		t.Error("Lock lost NOT sent after 2 seconds")
 	}
+
+	if !ctxWasCancelled {
+		t.Error("Expect ctx to be cancelled")
+	}
+}
+
+func TestRetryObtainingLockBehavior(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	shouldAccept := false
+	lockAttempts := 0
+	go func() {
+		time.Sleep(time.Second * 3)
+		shouldAccept = true
+	}()
+
+	lockInstance := &Lock{
+		ctx:     ctx,
+		LockTTL: time.Duration(time.Second * 1),
+		Lock: func() error {
+			if shouldAccept {
+				return nil
+			}
+			lockAttempts++
+			return fmt.Errorf("Simulated error")
+		},
+		LockLost: make(chan struct{}, 1),
+	}
+
+	RetryObtainingLock(lockInstance)
+
+	err := lockInstance.Lock()
+	if err != nil {
+		t.Error("Failed to retry lock and instead returned error")
+	}
+
+	t.Logf("Lock obtained after %v attempts", lockAttempts)
 }
 
 func TestPanicOnLostLock(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	ctxWasCancelled := false
 	didPanic := false
 	lockInstance := &Lock{
-		ctx:      ctx,
+		ctx: ctx,
+		Cancel: func() {
+			ctxWasCancelled = true
+		},
 		panic:    func(s string) { didPanic = true },
 		LockTTL:  time.Duration(time.Second * 1),
 		LockLost: make(chan struct{}, 1),
@@ -77,5 +123,9 @@ func TestPanicOnLostLock(t *testing.T) {
 
 	if !didPanic {
 		t.Error("Expected panic and didn't get one")
+	}
+
+	if !ctxWasCancelled {
+		t.Error("Expect ctx to be cancelled")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fortytw2/leaktest"
 	"github.com/joho/godotenv"
 )
 
@@ -14,6 +15,8 @@ func TestLockingEnd2End_Normal(t *testing.T) {
 		t.Log("Skipping integration test as '-short' specified")
 		return
 	}
+	defer leaktest.Check(t)()
+
 	err := godotenv.Load()
 	if err != nil {
 		t.Log("No .env file found")
@@ -64,6 +67,7 @@ func TestLockingEnd2End_AutoRenewal(t *testing.T) {
 		t.Log("Skipping integration test as '-short' specified")
 		return
 	}
+	defer leaktest.CheckTimeout(t, time.Duration(time.Second*22))()
 
 	err := godotenv.Load()
 	if err != nil {
@@ -82,6 +86,7 @@ func TestLockingEnd2End_AutoRenewal(t *testing.T) {
 	if err != nil {
 		t.Errorf("Failed to get lock: %+v", err)
 	}
+	defer lock.Cancel()
 	t.Logf("Acquired lease: %s", lock.LockID.String())
 
 	// Wait longer than the lock is valid for
@@ -95,6 +100,8 @@ func TestLockingEnd2End_AutoRenewal(t *testing.T) {
 		t.Error(err)
 		return
 	}
+	defer duplicateLock.Cancel()
+
 	err = duplicateLock.Lock()
 	if err == nil {
 		t.Error("Expected an error but got nil when attempting to obtain already locked lock")
@@ -107,6 +114,7 @@ func TestLockingEnd2End_InvalidLockName(t *testing.T) {
 		t.Log("Skipping integration test as '-short' specified")
 		return
 	}
+	defer leaktest.Check(t)()
 
 	err := godotenv.Load()
 	if err != nil {
