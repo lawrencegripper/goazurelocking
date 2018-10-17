@@ -179,7 +179,10 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 
 	lockInstance.Lock = func() error {
 		if lockInstance.used {
-			return fmt.Errorf("Lock instance already used, cannot be reused")
+			return fmt.Errorf("Lock instance already unlocked, cannot be reused")
+		}
+		if lockInstance.lockAcquired {
+			return fmt.Errorf("Lock already acquire, call 'renew' to extend a lock")
 		}
 		_, err := containerURL.AcquireLease(lockInstance.ctx, lockInstance.LockID.String(), int32(lockTTL.Seconds()), azblob.HTTPAccessConditions{})
 		if err != nil {
