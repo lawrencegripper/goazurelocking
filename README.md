@@ -10,10 +10,10 @@ Create a `LockInstance` for a lock named `lock1`
 
 ```golang
 
-    lock, err := goazurelocking.NewLockInstance(ctx, "azureStorageAccountNameHere", "azureStorageKeyHere", "lock1", time.Duration(time.Second*5))
-	if err != nil {
-		panic(err)
-    }
+lock, err := goazurelocking.NewLockInstance(ctx, "azureStorageAccountNameHere", "azureStorageKeyHere", "lock1", time.Duration(time.Second*5))
+if err != nil {
+	panic(err)
+}
 
 ```
 
@@ -21,19 +21,19 @@ Obtain a lock on the `LockInstance` named `lock1` then release it when your done
 
 ```golang
 
-    // Get the lock
-    err = lock.Lock()
-	if err != nil {
-		panic("Failed to get lock: %+v", err)
-	}
-    fmt.Printf("Acquired lease: %s", lock.LockID.String())
+// Get the lock
+err = lock.Lock()
+if err != nil {
+	panic("Failed to get lock: %+v", err)
+}
+fmt.Printf("Acquired lease: %s", lock.LockID.String())
 
-    // Release the lock
-	err = lock.Unlock()
-	if err != nil {
-		panic(err)
-	}
-    
+// Release the lock
+err = lock.Unlock()
+if err != nil {
+	panic(err)
+}
+   
 ```
 
 
