@@ -84,7 +84,15 @@ var (
 			for {
 				select {
 				case <-l.ctx.Done():
-					//l.unlockContext(context.Background()) //nolint: errcheck
+					// If the 'lock' function wasn't ever called don't worry
+					if !l.lockAcquired {
+						return
+					}
+					// The original context is dead but we don't want to leave the lock in place
+					// so lets create a new context and give it 3 seconds to get the job done
+					ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Second*3))
+					defer cancel()
+					l.unlockContext(ctx) //nolint: errcheck
 				}
 			}
 		}()
