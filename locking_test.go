@@ -37,7 +37,8 @@ func TestAutoRenewLockBehavior_Fail(t *testing.T) {
 
 	ctxWasCancelled := false
 	lockInstance := &Lock{
-		ctx: ctx,
+		ctx:          ctx,
+		lockAcquired: true,
 		Cancel: func() {
 			ctxWasCancelled = true
 		},
