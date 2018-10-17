@@ -14,8 +14,9 @@ func TestAutoRenewLockBehavior_Normal(t *testing.T) {
 	defer cancel()
 
 	lockInstance := &Lock{
-		ctx:     ctx,
-		LockTTL: time.Duration(time.Second * 1),
+		ctx:          ctx,
+		lockAcquired: true,
+		LockTTL:      time.Duration(time.Second * 1),
 		Renew: func() error {
 			renewCalledcount++
 			return nil

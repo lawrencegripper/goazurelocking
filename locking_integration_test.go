@@ -37,7 +37,7 @@ func TestLockingEnd2End_Normal(t *testing.T) {
 	t.Logf("Acquired lease: %s", lock.LockID.String())
 
 	// Attempt to take another lock of the same name
-	duplicateLock, err := NewLockTestHelper(ctx, "lock1", time.Duration(time.Second*15), AutoRenewLock)
+	duplicateLock, err := NewLockTestHelper(ctx, "lock1", time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
 	if err != nil {
 		t.Error(err)
 		return
@@ -76,7 +76,7 @@ func TestLockingEnd2End_AutoRenewal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	lock, err := NewLockTestHelper(ctx, "lock2", time.Duration(time.Second*15), AutoRenewLock, PanicOnLostLock)
+	lock, err := NewLockTestHelper(ctx, "lock2", time.Duration(time.Second*15), AutoRenewLock, PanicOnLostLock, UnlockWhenContextCancelled)
 	if err != nil {
 		t.Error(err)
 		return
@@ -95,7 +95,7 @@ func TestLockingEnd2End_AutoRenewal(t *testing.T) {
 	time.Sleep(time.Second * 20)
 
 	// Attempt to take another lock of the same name
-	duplicateLock, err := NewLockTestHelper(ctx, "lock2", time.Duration(time.Second*15), AutoRenewLock)
+	duplicateLock, err := NewLockTestHelper(ctx, "lock2", time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
 	if err != nil {
 		t.Error(err)
 		return
@@ -107,8 +107,6 @@ func TestLockingEnd2End_AutoRenewal(t *testing.T) {
 		t.Error("Expected an error but got nil when attempting to obtain already locked lock")
 		return
 	}
-
-	duplicateLock.Unlock()
 }
 
 func TestLockingEnd2End_InvalidLockName(t *testing.T) {
@@ -116,7 +114,6 @@ func TestLockingEnd2End_InvalidLockName(t *testing.T) {
 		t.Log("Skipping integration test as '-short' specified")
 		return
 	}
-	defer leaktest.Check(t)()
 
 	err := godotenv.Load()
 	if err != nil {
@@ -125,7 +122,7 @@ func TestLockingEnd2End_InvalidLockName(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_, err = NewLockTestHelper(ctx, "lock1~~~@@@", time.Duration(time.Second*5), AutoRenewLock)
+	_, err = NewLockTestHelper(ctx, "lock1~~~@@@", time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
 	if err == nil {
 		t.Error("Expected an error but got nil")
 		return

@@ -41,14 +41,14 @@ var (
 			for {
 				select {
 				case <-l.ctx.Done():
-					// Contxt has been cancelled, exit so can be gc'd
+					// Context has been cancelled, exit so can be gc'd
 					return
 				case <-time.Tick(l.LockTTL / 2):
 					// If the 'lock' function hasn't been used yet spin
 					if !l.lockAcquired {
 						continue
 					}
-					// Do a renew, if we fail clean up and notify that the lock is lost
+					// Do a renew. If we fail, clean up and notify that the lock is lost
 					err := l.Renew()
 					if err != nil {
 						l.Cancel()
@@ -90,9 +90,13 @@ var (
 					}
 					// The original context is dead but we don't want to leave the lock in place
 					// so lets create a new context and give it 3 seconds to get the job done
-					ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Second*3))
+					ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Second*5))
 					defer cancel()
 					l.unlockContext(ctx) //nolint: errcheck
+
+					return
+				case <-l.LockLost:
+					return
 				}
 			}
 		}()
@@ -126,7 +130,22 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 		return nil, fmt.Errorf("LockTTL of %v seconds is outside allowed range of 15-60seconds", lockTTL.Seconds())
 	}
 
-	// Create our own context which will be canceled appropriately
+	creds := azblob.NewSharedKeyCredential(accountName, accountKey)
+
+	// Create a ContainerURL object to a container
+	u, _ := url.Parse(fmt.Sprintf("https://%s.blob.core.windows.net/%s", accountName, lockName))
+	containerURL := azblob.NewContainerURL(*u, azblob.NewPipeline(creds, azblob.PipelineOptions{}))
+	_, err := containerURL.Create(ctxParent, nil, azblob.PublicAccessNone)
+
+	// Create will return a '409' response code if the container already exists
+	// we only error on other conditions as it's expected that a lock of this
+	// name may already exist
+	if err != nil && err.(azblob.ResponseError) != nil && err.(azblob.ResponseError).Response().StatusCode != 409 {
+		return nil, err
+	}
+
+	// Create our own context which will be cancelled independantly of
+	// the parent context
 	ctx, cancel := context.WithCancel(ctxParent)
 
 	lockInstance := &Lock{
@@ -138,27 +157,12 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 		LockID:   uuid.NewV4(),
 	}
 
-	creds := azblob.NewSharedKeyCredential(accountName, accountKey)
-
-	// Create a ContainerURL object to a container
-	u, _ := url.Parse(fmt.Sprintf("https://%s.blob.core.windows.net/%s", accountName, lockName))
-	containerURL := azblob.NewContainerURL(*u, azblob.NewPipeline(creds, azblob.PipelineOptions{}))
-	_, err := containerURL.Create(ctx, nil, azblob.PublicAccessNone)
-
-	// Create will return a '409' response code if the container already exists
-	// we only error on other conditions as it's expected that a lock of this
-	// name may already exist
-	if err != nil && err.(azblob.ResponseError) != nil && err.(azblob.ResponseError).Response().StatusCode != 409 {
-		return nil, err
-	}
-
 	lockInstance.unlockContext = func(ctx context.Context) error {
 		// Mark this lock instance as used to prevent reuse
-		// as the library doesn't handle multiple uses per instance
+		// as the library doesn't handle multiple uses per lock instance
 		lockInstance.used = true
 
 		_, err := containerURL.ReleaseLease(ctx, lockInstance.LockID.String(), azblob.HTTPAccessConditions{})
-
 		// No matter what happened cancel the context to close off the go routines running in behaviors
 		lockInstance.Cancel()
 
