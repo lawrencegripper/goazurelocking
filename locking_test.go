@@ -53,3 +53,29 @@ func TestAutoRenewLockBehavior_Fail(t *testing.T) {
 		t.Error("Lock lost NOT sent after 2 seconds")
 	}
 }
+
+func TestPanicOnLostLock(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	didPanic := false
+	lockInstance := &Lock{
+		ctx:      ctx,
+		panic:    func(s string) { didPanic = true },
+		LockTTL:  time.Duration(time.Second * 1),
+		LockLost: make(chan struct{}, 1),
+	}
+
+	lockInstance.LockLost <- struct{}{}
+	PanicOnLostLock(lockInstance)
+
+	// Allow the go routine time to run
+	time.Sleep(time.Millisecond * 10)
+
+	// Because the panic is in the goroutine we can't detect it easily in
+	// the test so a panic func is used for this purpose
+
+	if !didPanic {
+		t.Error("Expected panic and didn't get one")
+	}
+}

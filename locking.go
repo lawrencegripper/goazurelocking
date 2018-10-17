@@ -16,6 +16,7 @@ type (
 	Lock struct {
 		ctx           context.Context
 		ready         sync.WaitGroup
+		panic         func(string)
 		LockTTL       time.Duration
 		LockLost      chan struct{}
 		LockID        uuid.UUID
@@ -30,7 +31,7 @@ type (
 )
 
 var (
-	DefaultLockBehaviors = []BehaviorFunc{AutoRenewLock, PanicOnLostLock, UnlockWhenContextCancelled}
+	defaultLockBehaviors = []BehaviorFunc{AutoRenewLock, PanicOnLostLock, UnlockWhenContextCancelled}
 
 	// AutoRenewLock configures the lock to autorenew itself
 	AutoRenewLock = BehaviorFunc(func(l *Lock) *Lock {
@@ -42,6 +43,7 @@ var (
 				case <-time.Tick(l.LockTTL / 2):
 					err := l.Renew()
 					if err != nil {
+						l.LockLost <- struct{}{}
 						return
 					}
 				case <-l.LockLost:
@@ -77,7 +79,7 @@ var (
 
 			select {
 			case <-l.LockLost:
-				panic("Lock lost and 'PanicOnLostLock' set")
+				l.panic("Lock lost and 'PanicOnLostLock' set")
 			case <-l.ctx.Done():
 				return
 			}
@@ -98,29 +100,20 @@ func NewLockInstance(ctx context.Context, accountName, accountKey, lockName stri
 		return nil, fmt.Errorf("LockTTL of %v seconds is outside allowed range of 15-60seconds", lockTTL.Seconds())
 	}
 
+	// To create a child context to stop go routing leaks
+	// do that here
+
 	lockInstance := &Lock{
 		ctx:      ctx,
+		panic:    func(s string) { panic(s) },
 		LockTTL:  lockTTL,
 		LockLost: make(chan struct{}, 1),
 		LockID:   uuid.NewV4(),
 	}
-	// Hold off running behavior funcs until ready
-	lockInstance.ready.Add(1)
-
-	// If behaviors haven't been defined use the defaults
-	if len(behavior) == 0 {
-		behavior = DefaultLockBehaviors
-	}
-
-	// Configure behaviors
-	for _, b := range behavior {
-		lockInstance = b(lockInstance)
-	}
 
 	creds := azblob.NewSharedKeyCredential(accountName, accountKey)
 
-	// Create a ContainerURL object to a container where we'll create a blob and its snapshot.
-	// Create a BlockBlobURL object to a blob in the container.
+	// Create a ContainerURL object to a container
 	u, _ := url.Parse(fmt.Sprintf("https://%s.blob.core.windows.net/%s", accountName, lockName))
 	containerURL := azblob.NewContainerURL(*u, azblob.NewPipeline(creds, azblob.PipelineOptions{}))
 	_, err := containerURL.Create(ctx, nil, azblob.PublicAccessNone)
@@ -143,7 +136,6 @@ func NewLockInstance(ctx context.Context, accountName, accountKey, lockName stri
 	lockInstance.Renew = func() error {
 		_, err := containerURL.RenewLease(lockInstance.ctx, lockInstance.LockID.String(), azblob.HTTPAccessConditions{})
 		if err != nil {
-			lockInstance.LockLost <- struct{}{}
 			return err
 		}
 		return nil
@@ -159,6 +151,19 @@ func NewLockInstance(ctx context.Context, accountName, accountKey, lockName stri
 
 	lockInstance.Unlock = func() error {
 		return lockInstance.unlockContext(lockInstance.ctx)
+	}
+
+	// Hold off running behavior funcs until ready
+	lockInstance.ready.Add(1)
+
+	// If behaviors haven't been defined use the defaults
+	if len(behavior) == 0 {
+		behavior = defaultLockBehaviors
+	}
+
+	// Configure behaviors
+	for _, b := range behavior {
+		lockInstance = b(lockInstance)
 	}
 
 	// Start behavior funcs

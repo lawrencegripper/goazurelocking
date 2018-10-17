@@ -63,7 +63,7 @@ func TestLockingEnd2End_AutoRenewal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	lock, err := NewLockTestHelper(ctx, "lock1", time.Duration(time.Second*15), AutoRenewLock, PanicOnLostLock)
+	lock, err := NewLockTestHelper(ctx, "lock2", time.Duration(time.Second*15), AutoRenewLock, PanicOnLostLock)
 	if err != nil {
 		t.Error(err)
 		return
@@ -81,7 +81,7 @@ func TestLockingEnd2End_AutoRenewal(t *testing.T) {
 	time.Sleep(time.Second * 20)
 
 	// Attempt to take another lock of the same name
-	duplicateLock, err := NewLockTestHelper(ctx, "lock1", time.Duration(time.Second*15), AutoRenewLock)
+	duplicateLock, err := NewLockTestHelper(ctx, "lock2", time.Duration(time.Second*15), AutoRenewLock)
 	if err != nil {
 		t.Error(err)
 		return
