@@ -10,6 +10,10 @@ import (
 )
 
 func TestLockingEnd2End_Normal(t *testing.T) {
+	if testing.Short() {
+		t.Log("Skipping integration test as '-short' specified")
+		return
+	}
 	err := godotenv.Load()
 	if err != nil {
 		t.Log("No .env file found")
@@ -56,6 +60,11 @@ func TestLockingEnd2End_Normal(t *testing.T) {
 }
 
 func TestLockingEnd2End_AutoRenewal(t *testing.T) {
+	if testing.Short() {
+		t.Log("Skipping integration test as '-short' specified")
+		return
+	}
+
 	err := godotenv.Load()
 	if err != nil {
 		t.Log("No .env file found")
@@ -94,6 +103,11 @@ func TestLockingEnd2End_AutoRenewal(t *testing.T) {
 }
 
 func TestLockingEnd2End_InvalidLockName(t *testing.T) {
+	if testing.Short() {
+		t.Log("Skipping integration test as '-short' specified")
+		return
+	}
+
 	err := godotenv.Load()
 	if err != nil {
 		t.Log("No .env file found")
