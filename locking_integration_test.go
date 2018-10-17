@@ -10,7 +10,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
-func TestLockingEnd2End_Normal(t *testing.T) {
+func TestLockingEnd2End_Simple(t *testing.T) {
 	if testing.Short() {
 		t.Log("Skipping integration test as '-short' specified")
 		return
@@ -24,7 +24,7 @@ func TestLockingEnd2End_Normal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	lock, err := NewLockTestHelper(ctx, "lock1", time.Duration(time.Second*15), AutoRenewLock)
+	lock, err := NewLockTestHelper(ctx, "simple", time.Duration(time.Second*15), AutoRenewLock)
 	if err != nil {
 		t.Error(err)
 		return
@@ -37,7 +37,7 @@ func TestLockingEnd2End_Normal(t *testing.T) {
 	t.Logf("Acquired lease: %s", lock.LockID.String())
 
 	// Attempt to take another lock of the same name
-	duplicateLock, err := NewLockTestHelper(ctx, "lock1", time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
+	duplicateLock, err := NewLockTestHelper(ctx, "simple", time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
 	if err != nil {
 		t.Error(err)
 		return
@@ -50,6 +50,52 @@ func TestLockingEnd2End_Normal(t *testing.T) {
 
 	// Release original lock
 	err = lock.Unlock()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	err = duplicateLock.Lock()
+	if err != nil {
+		t.Error("Expected duplicate lock to get lock but this failed")
+	}
+}
+
+func TestLockingEnd2End_Defaults(t *testing.T) {
+	if testing.Short() {
+		t.Log("Skipping integration test as '-short' specified")
+		return
+	}
+	defer leaktest.Check(t)()
+
+	err := godotenv.Load()
+	if err != nil {
+		t.Log("No .env file found")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	lock, err := NewLockTestHelper(ctx, "defaults", time.Duration(time.Second*15), defaultLockBehaviors...)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	err = lock.Lock()
+	if err != nil {
+		t.Errorf("Failed to get lock: %+v", err)
+	}
+	t.Logf("Acquired lease: %s", lock.LockID.String())
+
+	// Release original lock
+	err = lock.Unlock()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	// Attempt to take another lock of the same name
+	duplicateLock, err := NewLockTestHelper(ctx, "defaults", time.Duration(time.Second*15), defaultLockBehaviors...)
 	if err != nil {
 		t.Error(err)
 		return
@@ -198,6 +244,57 @@ func TestLockingEnd2End_UseUnlockTwice(t *testing.T) {
 	err = lock.Unlock()
 	if err == nil {
 		t.Error("Expected error but got nil: should be able to reuse a lock instance")
+	}
+}
+
+func TestLockingEnd2End_LockRetry(t *testing.T) {
+	if testing.Short() {
+		t.Log("Skipping integration test as '-short' specified")
+		return
+	}
+
+	err := godotenv.Load()
+	if err != nil {
+		t.Log("No .env file found")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Acquire a lock without autoRenew: will expire in 15 seconds
+	lock, err := NewLockTestHelper(ctx, "lockretry", time.Duration(time.Second*15), UnlockWhenContextCancelled)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	err = lock.Lock()
+	if err != nil {
+		t.Errorf("Failed to get lock: %+v", err)
+	}
+	t.Logf("Acquired lease: %s", lock.LockID.String())
+
+	timeBeforeAttempts := time.Now()
+
+	// Attempt to take another lock of the same name
+	duplicateLock, err := NewLockTestHelper(ctx, "lockretry", time.Duration(time.Second*15), RetryObtainingLock, UnlockWhenContextCancelled)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	// Expected that this lock operation will retry until it's acquired
+	err = duplicateLock.Lock()
+	if err != nil {
+		t.Errorf("Expected lock to be acquired after retrys, got error: %v", err)
+		return
+	}
+
+	// Check that this happened in a sensible timeframe
+	timeAfterAttempts := time.Now()
+	timeTakenToAcquireLock := timeAfterAttempts.Sub(timeBeforeAttempts).Seconds()
+
+	if timeTakenToAcquireLock < 15 || timeTakenToAcquireLock > 20 {
+		t.Errorf("Expected lock to be acquired in between 15-20, got: %v sec", timeTakenToAcquireLock)
 	}
 }
 

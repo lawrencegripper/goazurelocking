@@ -144,7 +144,7 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 		return nil, err
 	}
 
-	// Create our own context which will be cancelled independantly of
+	// Create our own context which will be cancelled independently of
 	// the parent context
 	ctx, cancel := context.WithCancel(ctxParent)
 
