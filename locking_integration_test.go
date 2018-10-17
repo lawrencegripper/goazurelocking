@@ -109,7 +109,6 @@ func TestLockingEnd2End_AutoRenewal(t *testing.T) {
 	}
 
 	duplicateLock.Unlock()
-	lock.Unlock()
 }
 
 func TestLockingEnd2End_InvalidLockName(t *testing.T) {
