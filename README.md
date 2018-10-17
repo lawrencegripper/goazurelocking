@@ -1,5 +1,7 @@
 # GoAzureLocking
 
+[![Build Status](https://dev.azure.com/lawrencegripper/goazurelocking2/_apis/build/status/lawrencegripper.goazurelocking?branchName=master)](https://dev.azure.com/lawrencegripper/goazurelocking2/_build/latest?definitionId=2)
+
 ## About 
 
 The package provides a simple interface to handle locking between components running in Azure. It requires an Azure Storage account and use a [`Lease`](https://docs.microsoft.com/en-us/rest/api/storageservices/lease-container) on [`storage containers`](https://docs.microsoft.com/en-us/rest/api/storageservices/create-container) behind the scenes. 
