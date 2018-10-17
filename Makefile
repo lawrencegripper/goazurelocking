@@ -9,7 +9,7 @@ test:
 	go test -v -short ./...
 
 integration:
-	go test -v -timeout 5m ./...
+	bash -f ./scripts/run_integration_tests.sh
 
 build:
 	go build .
