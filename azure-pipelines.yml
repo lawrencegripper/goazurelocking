@@ -17,10 +17,15 @@ steps:
     echo '##vso[task.prependpath]$(GOBIN)'
     echo '##vso[task.prependpath]$(GOROOT)/bin'
   displayName: 'Set up the Go workspace'
+
 - script: bash -f ./scripts/install_tools.sh && make
   displayName: 'Build Go and test'
   workingDirectory: '$(modulePath)'
+
 - script: make integration
   displayName: 'Run integration tests'
   workingDirectory: '$(modulePath)'
   condition: eq(variables['System.PullRequest.IsFork'], 'False')
+  env:
+    AZURE_STORAGE_NAME: $(azure.storage.name)
+    AZURE_STORAGE_KEY: $(azure.storage.key)
