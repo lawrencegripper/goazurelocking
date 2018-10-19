@@ -15,17 +15,35 @@ type (
 	// Lock represents the status of a lock
 	Lock struct {
 		ctx           context.Context
-		used          bool
-		lockAcquired  bool
-		Cancel        context.CancelFunc
-		panic         func(string)
-		LockTTL       time.Duration
-		LockLost      chan struct{}
-		LockID        uuid.UUID
-		Lock          func() error
-		Renew         func() error
-		Unlock        func() error
-		unlockContext func(context.Context) error
+		used          bool                        // Set to True when a lock has been unlocked
+		lockAcquired  bool                        // Set to True when a lock has been acquired
+		panic         func(string)                // Used for testing to allow panic call to be mocked
+		unlockContext func(context.Context) error // Used by 'UnlockWhenCancelled' behavior to pass temporary context to unlock
+
+		// Cancel calls the 'Unlock' method but, when combined with the 'UnlockWhenContextCancelled' behavior, will use a temporary
+		// context will a 5 second deadline to allow the lock to be released even if the parent context has been cancelled.
+		Cancel context.CancelFunc
+
+		// LockTTL is the duration for which the lock is to be held
+		// Valid options: 15sec -> 60sec due to Azure Blob https://docs.microsoft.com/en-us/rest/api/storageservices/lease-container
+		LockTTL time.Duration
+
+		// LockLost This channel is signaled by the 'AutoRenew' behavior if the lock is lost
+		LockLost chan struct{}
+
+		// LockID is the ID of the underlying blob lease
+		LockID uuid.UUID
+
+		// Lock will acquire a lock for the specified name
+		Lock func() error
+
+		// Renew will renew the lock, if present
+		// or return an error if no lock is held
+		Renew func() error
+
+		// Unlock will release the lock, if present
+		// or return an error if no lock is held
+		Unlock func() error
 	}
 
 	// BehaviorFunc is a type converter that allows a func to be used as a `Behavior`
@@ -158,13 +176,18 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 	}
 
 	lockInstance.unlockContext = func(ctx context.Context) error {
+		if !lockInstance.lockAcquired {
+			return fmt.Errorf("Lock not acquired, can't unlock")
+		}
+
 		// Mark this lock instance as used to prevent reuse
 		// as the library doesn't handle multiple uses per lock instance
 		lockInstance.used = true
 
-		_, err := containerURL.ReleaseLease(ctx, lockInstance.LockID.String(), azblob.HTTPAccessConditions{})
 		// No matter what happened cancel the context to close off the go routines running in behaviors
-		lockInstance.Cancel()
+		defer lockInstance.Cancel()
+
+		_, err := containerURL.ReleaseLease(ctx, lockInstance.LockID.String(), azblob.HTTPAccessConditions{})
 
 		if err != nil {
 			return err
@@ -195,6 +218,9 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 	}
 
 	lockInstance.Renew = func() error {
+		if !lockInstance.lockAcquired {
+			return fmt.Errorf("Lock not acquired, can't renew")
+		}
 		if lockInstance.used {
 			return fmt.Errorf("Lock instance already used, cannot be reused")
 		}

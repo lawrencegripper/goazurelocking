@@ -61,6 +61,42 @@ func TestLockingEnd2End_Simple(t *testing.T) {
 	}
 }
 
+func TestLockingEnd2End_UnlockOrRenewWithoutLocking(t *testing.T) {
+	if testing.Short() {
+		t.Log("Skipping integration test as '-short' specified")
+		return
+	}
+
+	err := godotenv.Load()
+	if err != nil {
+		t.Log("No .env file found")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	lock, err := NewLockTestHelper(ctx, "simple", time.Duration(time.Second*15), AutoRenewLock)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	defer lock.Cancel()
+
+	// Release original lock and check error is returned
+	err = lock.Unlock()
+	if err == nil || err.Error() != "Lock not acquired, can't unlock" {
+		t.Errorf("Expected error to be returned when UNLOCKING as no lock is held")
+		return
+	}
+	t.Logf("Error returned as expected: %+v", err)
+
+	err = lock.Renew()
+	if err == nil || err.Error() != "Lock not acquired, can't renew" {
+		t.Errorf("Expected error to be returned when RENEWING as no lock is held")
+		return
+	}
+	t.Logf("Error returned as expected: %+v", err)
+}
+
 func TestLockingEnd2End_Defaults(t *testing.T) {
 	if testing.Short() {
 		t.Log("Skipping integration test as '-short' specified")
@@ -293,8 +329,8 @@ func TestLockingEnd2End_LockRetry(t *testing.T) {
 	timeAfterAttempts := time.Now()
 	timeTakenToAcquireLock := timeAfterAttempts.Sub(timeBeforeAttempts).Seconds()
 
-	if timeTakenToAcquireLock < 15 || timeTakenToAcquireLock > 20 {
-		t.Errorf("Expected lock to be acquired in between 15-20, got: %v sec", timeTakenToAcquireLock)
+	if timeTakenToAcquireLock < 15 || timeTakenToAcquireLock > 30 {
+		t.Errorf("Expected lock to be acquired in between 15-30, got: %v sec", timeTakenToAcquireLock)
 	}
 }
 
