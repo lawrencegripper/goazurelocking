@@ -2,10 +2,14 @@ package locking
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Azure/azure-storage-blob-go/2016-05-31/azblob"
 	"github.com/fortytw2/leaktest"
 	"github.com/joho/godotenv"
 )
@@ -24,7 +28,7 @@ func TestLockingEnd2End_Simple(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	lock, err := NewLockTestHelper(ctx, "simple", time.Duration(time.Second*15), AutoRenewLock)
+	lock, err := NewLockTestHelper(ctx, "Simple", time.Duration(time.Second*15), AutoRenewLock)
 	if err != nil {
 		t.Error(err)
 		return
@@ -37,7 +41,7 @@ func TestLockingEnd2End_Simple(t *testing.T) {
 	t.Logf("Acquired lease: %s", lock.LockID.String())
 
 	// Attempt to take another lock of the same name
-	duplicateLock, err := NewLockTestHelper(ctx, "simple", time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
+	duplicateLock, err := NewLockTestHelper(ctx, "Simple", time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
 	if err != nil {
 		t.Error(err)
 		return
@@ -332,6 +336,56 @@ func TestLockingEnd2End_LockRetry(t *testing.T) {
 	if timeTakenToAcquireLock < 15 || timeTakenToAcquireLock > 30 {
 		t.Errorf("Expected lock to be acquired in between 15-30, got: %v sec", timeTakenToAcquireLock)
 	}
+}
+
+func TestLockingEnd2End_CheckContainerCleanup(t *testing.T) {
+	if testing.Short() {
+		t.Log("Skipping integration test as '-short' specified")
+		return
+	}
+
+	lockName := strings.ToLower("CheckCleanup")
+	err := godotenv.Load()
+	if err != nil {
+		t.Log("No .env file found")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	lock, err := NewLockTestHelper(ctx, lockName, time.Duration(time.Second*15), AutoRenewLock)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	defer lock.Cancel()
+
+	err = lock.Lock()
+	if err != nil {
+		t.Errorf("Failed acquiring lock: %v", err)
+	}
+
+	// Release original lock and check error is returned
+	err = lock.Unlock()
+	if err != nil {
+		t.Errorf("Expected error to be returned when UNLOCKING as no lock is held")
+		return
+	}
+
+	// Check to see the container has been removed
+	accountName := os.Getenv("AZURE_STORAGE_NAME")
+	accountKey := os.Getenv("AZURE_STORAGE_KEY")
+
+	creds := azblob.NewSharedKeyCredential(accountName, accountKey)
+
+	// Create a ContainerURL object to a container
+	u, _ := url.Parse(fmt.Sprintf("https://%s.blob.core.windows.net/%s", accountName, lockContainerNamePrefix+lockName))
+	containerURL := azblob.NewContainerURL(*u, azblob.NewPipeline(creds, azblob.PipelineOptions{}))
+
+	props, err := containerURL.GetPropertiesAndMetadata(ctx, azblob.LeaseAccessConditions{})
+	if err == nil && props.StatusCode() == 200 {
+		t.Error("Expected container to be removed but still present")
+	}
+
 }
 
 func NewLockTestHelper(ctx context.Context, lockName string, lockTTL time.Duration, behavior ...BehaviorFunc) (*Lock, error) {
