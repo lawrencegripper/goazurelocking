@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/fortytw2/leaktest"
 )
 
 func TestAutoRenewLockBehavior_Normal(t *testing.T) {
+	defer leaktest.Check(t)()
+
 	renewCalledcount := 0
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -33,6 +37,8 @@ func TestAutoRenewLockBehavior_Normal(t *testing.T) {
 }
 
 func TestAutoRenewLockBehavior_Fail(t *testing.T) {
+	defer leaktest.Check(t)()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -40,7 +46,7 @@ func TestAutoRenewLockBehavior_Fail(t *testing.T) {
 	lockInstance := &Lock{
 		ctx:          ctx,
 		lockAcquired: true,
-		Cancel: func() {
+		cancel: func() {
 			ctxWasCancelled = true
 		},
 		LockTTL: time.Duration(time.Second * 1),
@@ -65,6 +71,8 @@ func TestAutoRenewLockBehavior_Fail(t *testing.T) {
 }
 
 func TestRetryObtainingLockBehavior(t *testing.T) {
+	defer leaktest.Check(t)()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -99,15 +107,18 @@ func TestRetryObtainingLockBehavior(t *testing.T) {
 }
 
 func TestPanicOnLostLock(t *testing.T) {
+	defer leaktest.Check(t)()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	ctxWasCancelled := false
+	unlockWasCalled := false
 	didPanic := false
 	lockInstance := &Lock{
 		ctx: ctx,
-		Cancel: func() {
-			ctxWasCancelled = true
+		Unlock: func() error {
+			unlockWasCalled = true
+			return nil
 		},
 		panic:    func(s string) { didPanic = true },
 		LockTTL:  time.Duration(time.Second * 1),
@@ -127,7 +138,7 @@ func TestPanicOnLostLock(t *testing.T) {
 		t.Error("Expected panic and didn't get one")
 	}
 
-	if !ctxWasCancelled {
-		t.Error("Expect ctx to be cancelled")
+	if !unlockWasCalled {
+		t.Error("Expect `unlock` to be called")
 	}
 }

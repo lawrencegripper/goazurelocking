@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/Azure/azure-storage-blob-go/2016-05-31/azblob"
@@ -19,10 +20,7 @@ type (
 		lockAcquired  bool                        // Set to True when a lock has been acquired
 		panic         func(string)                // Used for testing to allow panic call to be mocked
 		unlockContext func(context.Context) error // Used by 'UnlockWhenCancelled' behavior to pass temporary context to unlock
-
-		// Cancel calls the 'Unlock' method but, when combined with the 'UnlockWhenContextCancelled' behavior, will use a temporary
-		// context will a 5 second deadline to allow the lock to be released even if the parent context has been cancelled.
-		Cancel context.CancelFunc
+		cancel        context.CancelFunc          // Cancel is used internally to exit goRoutines of behaviors
 
 		// LockTTL is the duration for which the lock is to be held
 		// Valid options: 15sec -> 60sec due to Azure Blob https://docs.microsoft.com/en-us/rest/api/storageservices/lease-container
@@ -69,7 +67,7 @@ var (
 					// Do a renew. If we fail, clean up and notify that the lock is lost
 					err := l.Renew()
 					if err != nil {
-						l.Cancel()
+						l.cancel()
 						l.LockLost <- struct{}{}
 						return
 					}
@@ -128,7 +126,7 @@ var (
 			case <-l.ctx.Done():
 				return
 			case <-l.LockLost:
-				l.Cancel()
+				l.Unlock() //nolint: errcheck
 				l.panic("Lock lost and 'PanicOnLostLock' set")
 			}
 		}()
@@ -137,28 +135,50 @@ var (
 )
 
 // NewLockInstance returns a new instance of a lock
-func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockName string, lockTTL time.Duration, behavior ...BehaviorFunc) (*Lock, error) {
-	if accountKey == "" {
+//
+// Params
+// StorageAccountURL: HTTPS endpoint for your storage account eg. `https://mystorageaccount.blob.core.windows.net` if your account is named `mystorageaccount`
+// StorageAccountKey: The access key for your storage account
+// LockName: An alphanumberic string < 58 chars that will represent your lock.
+// LockTTL: A duration between 15 and 60 seconds for which the lock will be held. Note, by default the `AutoRenew` behavior will renew locks until `Unlock` is called
+//
+// Advanced
+// Behaviors: Funcs which allow you to mutate the lockInstance's behavior. Leave empty for default behavior
+//
+func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccountKey, lockName string, lockTTL time.Duration, behavior ...BehaviorFunc) (*Lock, error) {
+	if storageAccountKey == "" {
 		return nil, fmt.Errorf("Empty accountKey is invalid")
-	}
-	if accountName == "" {
-		return nil, fmt.Errorf("Empty accountName is invalid")
 	}
 	if lockTTL.Seconds() < 15 || lockTTL.Seconds() > 60 {
 		return nil, fmt.Errorf("LockTTL of %v seconds is outside allowed range of 15-60seconds", lockTTL.Seconds())
 	}
 
-	creds := azblob.NewSharedKeyCredential(accountName, accountKey)
+	storageAccountURLParsed, err := url.Parse(storageAccountURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse storageAccountUrl, err: %+v", err)
+	}
+	if storageAccountURLParsed.Scheme != "https" {
+		return nil, fmt.Errorf("storageAccountURL should be 'https' eg. 'https://mystorageaccount.blob.core.windows.net'")
+	}
+	// Extract the accountname from the storage URL
+	// for example 'https://mystorageaccount.blob.core.windows.net' -> 'mystorageaccount'
+	accountName, err := extractAccountNameFromURL(storageAccountURLParsed)
+	if err != nil {
+		return nil, err
+	}
+
+	creds := azblob.NewSharedKeyCredential(accountName, storageAccountKey)
 
 	// Create a ContainerURL object to a container
-	u, _ := url.Parse(fmt.Sprintf("https://%s.blob.core.windows.net/%s", accountName, lockName))
+	u, _ := url.Parse(fmt.Sprintf("%s/%s", storageAccountURL, lockName))
 	containerURL := azblob.NewContainerURL(*u, azblob.NewPipeline(creds, azblob.PipelineOptions{}))
-	_, err := containerURL.Create(ctxParent, nil, azblob.PublicAccessNone)
+	_, err = containerURL.Create(ctxParent, nil, azblob.PublicAccessNone)
 
 	// Create will return a '409' response code if the container already exists
 	// we only error on other conditions as it's expected that a lock of this
 	// name may already exist
-	if err != nil && err.(azblob.ResponseError) != nil && err.(azblob.ResponseError).Response().StatusCode != 409 {
+	_, isReponseError := err.(azblob.ResponseError)
+	if err != nil && isReponseError && err.(azblob.ResponseError).Response().StatusCode != 409 {
 		return nil, err
 	}
 
@@ -168,7 +188,7 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 
 	lockInstance := &Lock{
 		ctx:      ctx,
-		Cancel:   cancel,
+		cancel:   cancel,
 		panic:    func(s string) { panic(s) },
 		LockTTL:  lockTTL,
 		LockLost: make(chan struct{}, 1),
@@ -185,7 +205,7 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 		lockInstance.used = true
 
 		// No matter what happened cancel the context to close off the go routines running in behaviors
-		defer lockInstance.Cancel()
+		defer lockInstance.cancel()
 
 		_, err := containerURL.ReleaseLease(ctx, lockInstance.LockID.String(), azblob.HTTPAccessConditions{})
 
@@ -242,4 +262,12 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 	}
 
 	return lockInstance, nil
+}
+
+func extractAccountNameFromURL(u *url.URL) (string, error) {
+	parts := strings.Split(u.Hostname(), ".")
+	if len(parts) < 1 {
+		return "", fmt.Errorf("couldn't extract accountname from: %s", u.String())
+	}
+	return parts[0], nil
 }

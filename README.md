@@ -16,7 +16,7 @@ lock, err := goazurelocking.NewLockInstance(ctx, "azureStorageAccountNameHere", 
 if err != nil {
 	panic(err)
 }
-defer lock.Cancel() // This will 'Unlock' the lock and cleanup go routines running, for example autorenew, on exit. 
+defer lock.Unlock() // This will 'Unlock' the lock and cleanup go routines running, for example autorenew, on exit. 
 
 ```
 
@@ -46,7 +46,7 @@ You can define custom behaviors which change how locking behaves, by default the
 
 - PanicOnLostLock: If a lock is lost before being `unlocked` go will panic
 - AutoRenewLocks: Once obtained a lock will be renewed until `unlocked`
-- UnlockWhenContextCancelled: If the context used is canceled a new context is created and an unlock will be attempted
+- UnlockWhenContextCancelled: If the context used is canceled a temporary context is created and an unlock will be attempted. The temporary context is allowed 5sec to complete.
 - RetryObtainingLock: If the lock is held elsewhere the `Lock` func will retry acquiring it for 10x the `LockTTL`
 
 You can create your own and pass them into the `NewLockInstance`. Beware, when you pass in a behavior all default behaviors are ignored. 

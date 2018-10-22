@@ -79,7 +79,7 @@ func TestLockingEnd2End_UnlockOrRenewWithoutLocking(t *testing.T) {
 		t.Error(err)
 		return
 	}
-	defer lock.Cancel()
+	defer lock.Unlock()
 
 	// Release original lock and check error is returned
 	err = lock.Unlock()

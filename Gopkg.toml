@@ -28,11 +28,7 @@
 [prune]
   go-tests = true
   unused-packages = true
-
-[[constraint]]
-  name = "github.com/Azure/azure-sdk-for-go"
-  version = "21.2.0"
-
+  
 [[constraint]]
   name = "github.com/Azure/azure-storage-blob-go"
   version = "0.2.0"
