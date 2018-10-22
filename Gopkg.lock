@@ -26,20 +26,20 @@
   version = "v2.0.0"
 
 [[projects]]
-  digest = "1:544229a3ca0fb2dd5ebc2896d3d2ff7ce096d9751635301e44e37e761349ee70"
-  name = "github.com/fortytw2/leaktest"
-  packages = ["."]
-  pruneopts = "UT"
-  revision = "a5ef70473c97b71626b9abeda80ee92ba2a7de9e"
-  version = "v1.2.0"
-
-[[projects]]
   digest = "1:ecd9aa82687cf31d1585d4ac61d0ba180e42e8a6182b85bd785fcca8dfeefc1b"
   name = "github.com/joho/godotenv"
   packages = ["."]
   pruneopts = "UT"
   revision = "23d116af351c84513e1946b527c88823e476be13"
   version = "v1.3.0"
+
+[[projects]]
+  digest = "1:544229a3ca0fb2dd5ebc2896d3d2ff7ce096d9751635301e44e37e761349ee70"
+  name = "github.com/lawrencegripper/leaktest"
+  packages = ["."]
+  pruneopts = "UT"
+  revision = "a5ef70473c97b71626b9abeda80ee92ba2a7de9e"
+  version = "v1.2.0"
 
 [[projects]]
   digest = "1:274f67cb6fed9588ea2521ecdac05a6d62a8c51c074c1fccc6a49a40ba80e925"
@@ -63,8 +63,8 @@
   input-imports = [
     "github.com/Azure/azure-storage-blob-go/2016-05-31/azblob",
     "github.com/cenkalti/backoff",
-    "github.com/fortytw2/leaktest",
     "github.com/joho/godotenv",
+    "github.com/lawrencegripper/leaktest",
     "github.com/satori/go.uuid",
   ]
   solver-name = "gps-cdcl"

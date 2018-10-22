@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/Azure/azure-storage-blob-go/2016-05-31/azblob"
-	"github.com/fortytw2/leaktest"
 	"github.com/joho/godotenv"
+	"github.com/lawrencegripper/leaktest"
 )
 
 func TestLockingEnd2End_Simple(t *testing.T) {

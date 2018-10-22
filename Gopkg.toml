@@ -50,5 +50,6 @@
   version = "2.0.0"
 
 [[constraint]]
-  name = "github.com/fortytw2/leaktest"
-  version = "1.2.0"
+  name = "github.com/lawrencegripper/leaktest"
+  # PR which ignores HTTPKeepAlives
+  # Todo: move back to "github.com/fortytw2/leaktest" once merged
