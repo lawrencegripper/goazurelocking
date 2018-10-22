@@ -12,13 +12,17 @@ Create a `LockInstance` for a lock named `lock1`
 
 ```golang
 
-lock, err := goazurelocking.NewLockInstance(ctx, "azureStorageAccountNameHere", "azureStorageKeyHere", "lock1", time.Duration(time.Second*5))
+lock, err := goazurelocking.NewLockInstance(ctx, "https://azureStorageAccountNameHere.blob.core.windows.net",
+ "azureStorageKeyHere", "lock1", time.Duration(time.Second*5))
 if err != nil {
 	panic(err)
 }
 defer lock.Unlock() // This will 'Unlock' the lock and cleanup go routines running, for example autorenew, on exit. 
 
 ```
+
+> Note: The storage account URL should be provided in full, including the `https://`. This allows for the library to be used against Azure Stack (untested). 
+	For a standards storage account this will be `https://THE-ACCOUNT-NAME-HERE.blob.core.windows.net`
 
 Obtain a lock on the `LockInstance` named `lock1` then release it when your done... simple as that!
 
