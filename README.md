@@ -43,6 +43,9 @@ if err != nil {
    
 ```
 
+> If you look at the storage account your using you'll see a container called `azlockcontainer` under it will be empty blobs for each of the locks you have created. You can 
+	configure [Azure Storage Lifecycle Management](https://azure.microsoft.com/en-us/blog/azure-blob-storage-lifecycle-management-public-preview/) to clear these down periodically
+
 
 ## Advanced
 

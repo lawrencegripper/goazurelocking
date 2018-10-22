@@ -1,15 +1,23 @@
 package locking
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/Azure/azure-storage-blob-go/2016-05-31/azblob"
 	"github.com/cenkalti/backoff"
 	"github.com/satori/go.uuid"
+)
+
+const (
+	lockBlobNamePrefix = "azlk-"           // This is appended to the blob containers created by the library
+	lockContainerName  = "azlockcontainer" // This is the name of the container used by the blobs created for locking
+
 )
 
 type (
@@ -21,6 +29,7 @@ type (
 		panic         func(string)                // Used for testing to allow panic call to be mocked
 		unlockContext func(context.Context) error // Used by 'UnlockWhenCancelled' behavior to pass temporary context to unlock
 		cancel        context.CancelFunc          // Cancel is used internally to exit goRoutines of behaviors
+		blobURL       azblob.BlobURL              // URL of the blob used for this lock
 
 		// LockTTL is the duration for which the lock is to be held
 		// Valid options: 15sec -> 60sec due to Azure Blob https://docs.microsoft.com/en-us/rest/api/storageservices/lease-container
@@ -152,6 +161,9 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 	if lockTTL.Seconds() < 15 || lockTTL.Seconds() > 60 {
 		return nil, fmt.Errorf("LockTTL of %v seconds is outside allowed range of 15-60seconds", lockTTL.Seconds())
 	}
+	if valid, err := IsValidLockName(lockName); !valid {
+		return nil, err
+	}
 
 	storageAccountURLParsed, err := url.Parse(storageAccountURL)
 	if err != nil {
@@ -170,15 +182,32 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 	creds := azblob.NewSharedKeyCredential(accountName, storageAccountKey)
 
 	// Create a ContainerURL object to a container
-	u, _ := url.Parse(fmt.Sprintf("%s/%s", storageAccountURL, lockName))
+	u, _ := url.Parse(fmt.Sprintf("%s/%s", storageAccountURL, lockContainerName))
 	containerURL := azblob.NewContainerURL(*u, azblob.NewPipeline(creds, azblob.PipelineOptions{}))
-	_, err = containerURL.Create(ctxParent, nil, azblob.PublicAccessNone)
 
+	_, err = containerURL.Create(ctxParent, nil, azblob.PublicAccessNone)
 	// Create will return a '409' response code if the container already exists
 	// we only error on other conditions as it's expected that a lock of this
 	// name may already exist
-	_, isReponseError := err.(azblob.ResponseError)
-	if err != nil && isReponseError && err.(azblob.ResponseError).Response().StatusCode != 409 {
+	errResponse, isReponseError := err.(azblob.StorageError)
+	if err != nil && !isReponseError && errResponse.ServiceCode() != azblob.ServiceCodeContainerAlreadyExists {
+		return nil, err
+	}
+
+	// Create a blob, we use leases on the blob to implement the lock
+	blobURL := containerURL.NewBlobURL(lockName)
+
+	// Upload an empty blob
+	buf := bytes.NewReader([]byte{})
+	_, err = blobURL.ToBlockBlobURL().PutBlob(ctxParent, buf, azblob.BlobHTTPHeaders{}, azblob.Metadata{}, azblob.BlobAccessConditions{})
+
+	// It's expected that a lock of this name may already exist
+	// and may already have an active lease BUT for any other
+	// ServiceCodes we should return an error
+	errResponse, isReponseError = err.(azblob.StorageError)
+	if err != nil && isReponseError &&
+		errResponse.ServiceCode() != azblob.ServiceCodeBlobAlreadyExists &&
+		errResponse.ServiceCode() != azblob.ServiceCodeLeaseIDMissing {
 		return nil, err
 	}
 
@@ -189,12 +218,16 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 	lockInstance := &Lock{
 		ctx:      ctx,
 		cancel:   cancel,
+		blobURL:  blobURL,
 		panic:    func(s string) { panic(s) },
 		LockTTL:  lockTTL,
 		LockLost: make(chan struct{}, 1),
 		LockID:   uuid.NewV4(),
 	}
 
+	// This function handles unlocking
+	// it accepts a context to allow locks to be unlocked
+	// even after a context has been cancelled
 	lockInstance.unlockContext = func(ctx context.Context) error {
 		if !lockInstance.lockAcquired {
 			return fmt.Errorf("Lock not acquired, can't unlock")
@@ -207,7 +240,7 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 		// No matter what happened cancel the context to close off the go routines running in behaviors
 		defer lockInstance.cancel()
 
-		_, err := containerURL.ReleaseLease(ctx, lockInstance.LockID.String(), azblob.HTTPAccessConditions{})
+		_, err := lockInstance.blobURL.ReleaseLease(ctx, lockInstance.LockID.String(), azblob.HTTPAccessConditions{})
 
 		if err != nil {
 			return err
@@ -227,7 +260,8 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 		if lockInstance.lockAcquired {
 			return fmt.Errorf("Lock already acquire, call 'renew' to extend a lock")
 		}
-		_, err := containerURL.AcquireLease(lockInstance.ctx, lockInstance.LockID.String(), int32(lockTTL.Seconds()), azblob.HTTPAccessConditions{})
+
+		_, err = lockInstance.blobURL.AcquireLease(lockInstance.ctx, lockInstance.LockID.String(), int32(lockTTL.Seconds()), azblob.HTTPAccessConditions{})
 		if err != nil {
 			return err
 		}
@@ -244,7 +278,7 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 		if lockInstance.used {
 			return fmt.Errorf("Lock instance already used, cannot be reused")
 		}
-		_, err := containerURL.RenewLease(lockInstance.ctx, lockInstance.LockID.String(), azblob.HTTPAccessConditions{})
+		_, err := lockInstance.blobURL.RenewLease(lockInstance.ctx, lockInstance.LockID.String(), azblob.HTTPAccessConditions{})
 		if err != nil {
 			return err
 		}
@@ -270,4 +304,22 @@ func extractAccountNameFromURL(u *url.URL) (string, error) {
 		return "", fmt.Errorf("couldn't extract accountname from: %s", u.String())
 	}
 	return parts[0], nil
+}
+
+// validLockNameRegex is a regex used to check the chars are valid as an Azure Storage container name
+var validLockNameRegex = regexp.MustCompile("^[a-z0-9]+(-[a-z0-9]+)*$")
+
+// IsValidLockName checks if the lock name is between 3-58 (63 minus 5char prefix used) characters long
+// and matches this regex @"^[a-z0-9]+(-[a-z0-9]+)*$"
+func IsValidLockName(lockName string) (bool, error) {
+	lockName = strings.ToLower(lockName)
+	if len(lockName) < 3 || len(lockName) > 58 {
+		return false, fmt.Errorf("lock name: %s must be between 3 and 58 characters long", lockName)
+	}
+
+	if !validLockNameRegex.MatchString(lockName) {
+		return false, fmt.Errorf("lock name: %s must be alphanumberic with no characters other than '-' (regex '^[a-z0-9]+(-[a-z0-9]+)*$')", lockName)
+	}
+
+	return true, nil
 }

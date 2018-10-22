@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fortytw2/leaktest"
+	"github.com/lawrencegripper/leaktest"
 )
 
 func TestAutoRenewLockBehavior_Normal(t *testing.T) {
@@ -140,5 +140,52 @@ func TestPanicOnLostLock(t *testing.T) {
 
 	if !unlockWasCalled {
 		t.Error("Expect `unlock` to be called")
+	}
+}
+
+func TestIsValidLockName(t *testing.T) {
+
+	tests := []struct {
+		name     string
+		lockName string
+		want     bool
+		wantErr  bool
+	}{
+		{
+			name:     "ValidLockName1",
+			lockName: "validlock1",
+			want:     true,
+			wantErr:  false,
+		},
+		{
+			name:     "ValidLockName2_toLowerCaps",
+			lockName: "ValidLock1",
+			want:     true,
+			wantErr:  false,
+		},
+		{
+			name:     "InvalidLockName_Long",
+			lockName: "invalidlock1validlock1validlock1validlock1validlock1validlock",
+			want:     false,
+			wantErr:  true,
+		},
+		{
+			name:     "InvalidLockName_@",
+			lockName: "invalid@lock",
+			want:     false,
+			wantErr:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := IsValidLockName(tt.lockName)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("IsValidLockName() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("IsValidLockName() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
