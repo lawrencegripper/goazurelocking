@@ -265,6 +265,9 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 	return lockInstance, nil
 }
 
+// validLockNameRegex is a regex used to check the chars are valid as an Azure Storage container name
+var validLockNameRegex = regexp.MustCompile("^[a-z0-9]+(-[a-z0-9]+)*$")
+
 // IsValidLockName checks if the lock name is between 3-58 (63 minus 5char prefix used) characters long
 // and matches this regex @"^[a-z0-9]+(-[a-z0-9]+)*$"
 func IsValidLockName(lockName string) (bool, error) {
@@ -273,7 +276,7 @@ func IsValidLockName(lockName string) (bool, error) {
 		return false, fmt.Errorf("lock name: %s must be between 3 and 58 characters long", lockName)
 	}
 
-	if match, _ := regexp.MatchString("^[a-z0-9]+(-[a-z0-9]+)*$", lockName); !match {
+	if !validLockNameRegex.MatchString(lockName) {
 		return false, fmt.Errorf("lock name: %s must be alphanumberic with no characters other than '-' (regex '^[a-z0-9]+(-[a-z0-9]+)*$')", lockName)
 	}
 
