@@ -1,6 +1,7 @@
 package locking
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/url"
@@ -13,17 +14,21 @@ import (
 	"github.com/satori/go.uuid"
 )
 
-const lockContainerNamePrefix = "azlk-" // This is appended to the blob containers created by the library
+const (
+	lockBlobNamePrefix = "azlk-"           // This is appended to the blob containers created by the library
+	lockContainerName  = "azlockcontainer" // This is the name of the container used by the blobs created for locking
+
+)
 
 type (
 	// Lock represents the status of a lock
 	Lock struct {
-		ctx              context.Context
-		used             bool                        // Set to True when a lock has been unlocked
-		lockAcquired     bool                        // Set to True when a lock has been acquired
-		panic            func(string)                // Used for testing to allow panic call to be mocked
-		unlockContext    func(context.Context) error // Used by 'UnlockWhenCancelled' behavior to pass temporary context to unlock
-		cleanupContainer func(context.Context)       // Used to cleanup the Azure Blob container after a lock is unlocked
+		ctx           context.Context
+		used          bool                        // Set to True when a lock has been unlocked
+		lockAcquired  bool                        // Set to True when a lock has been acquired
+		panic         func(string)                // Used for testing to allow panic call to be mocked
+		unlockContext func(context.Context) error // Used by 'UnlockWhenCancelled' behavior to pass temporary context to unlock
+		blobURL       azblob.BlobURL              // URL of the blob used for this lock
 
 		// Cancel calls the 'Unlock' method but, when combined with the 'UnlockWhenContextCancelled' behavior, will use a temporary
 		// context will a 5 second deadline to allow the lock to be released even if the parent context has been cancelled.
@@ -159,15 +164,32 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 	creds := azblob.NewSharedKeyCredential(accountName, accountKey)
 
 	// Create a ContainerURL object to a container
-	lockName = strings.ToLower(lockName)
-	u, _ := url.Parse(fmt.Sprintf("https://%s.blob.core.windows.net/%s", accountName, lockContainerNamePrefix+lockName))
+	u, _ := url.Parse(fmt.Sprintf("https://%s.blob.core.windows.net/%s", accountName, lockContainerName))
 	containerURL := azblob.NewContainerURL(*u, azblob.NewPipeline(creds, azblob.PipelineOptions{}))
-	_, err := containerURL.Create(ctxParent, nil, azblob.PublicAccessNone)
 
+	_, err := containerURL.Create(ctxParent, nil, azblob.PublicAccessNone)
 	// Create will return a '409' response code if the container already exists
 	// we only error on other conditions as it's expected that a lock of this
 	// name may already exist
-	if err != nil && err.(azblob.ResponseError) != nil && err.(azblob.ResponseError).Response().StatusCode != 409 {
+	errResponse, isReponseError := err.(azblob.StorageError)
+	if err != nil && !isReponseError && errResponse.ServiceCode() != azblob.ServiceCodeContainerAlreadyExists {
+		return nil, err
+	}
+
+	// Create a blob, we use leases on the blob to implement the lock
+	blobURL := containerURL.NewBlobURL(lockName)
+
+	// Upload an empty blob
+	buf := bytes.NewReader([]byte{})
+	_, err = blobURL.ToBlockBlobURL().PutBlob(ctxParent, buf, azblob.BlobHTTPHeaders{}, azblob.Metadata{}, azblob.BlobAccessConditions{})
+
+	// It's expected that a lock of this name may already exist
+	// and may already have an active lease BUT for any other
+	// ServiceCodes we should return an error
+	errResponse, isReponseError = err.(azblob.StorageError)
+	if err != nil && isReponseError &&
+		errResponse.ServiceCode() != azblob.ServiceCodeBlobAlreadyExists &&
+		errResponse.ServiceCode() != azblob.ServiceCodeLeaseIDMissing {
 		return nil, err
 	}
 
@@ -177,19 +199,12 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 
 	lockInstance := &Lock{
 		ctx:      ctx,
+		blobURL:  blobURL,
 		Cancel:   cancel,
 		panic:    func(s string) { panic(s) },
 		LockTTL:  lockTTL,
 		LockLost: make(chan struct{}, 1),
 		LockID:   uuid.NewV4(),
-	}
-
-	// This function is used to cleanup the container
-	// created by the lock instance. It's called after an
-	// instance has 'Unlock' called. It's a best effort measure
-	// in some circumstances containers will be left in the storage account
-	lockInstance.cleanupContainer = func(ctx context.Context) {
-		containerURL.Delete(ctx, azblob.ContainerAccessConditions{}) //nolint: errcheck
 	}
 
 	// This function handles unlocking
@@ -207,8 +222,7 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 		// No matter what happened cancel the context to close off the go routines running in behaviors
 		defer lockInstance.Cancel()
 
-		_, err := containerURL.ReleaseLease(ctx, lockInstance.LockID.String(), azblob.HTTPAccessConditions{})
-		lockInstance.cleanupContainer(ctx)
+		_, err := lockInstance.blobURL.ReleaseLease(ctx, lockInstance.LockID.String(), azblob.HTTPAccessConditions{})
 
 		if err != nil {
 			return err
@@ -228,7 +242,8 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 		if lockInstance.lockAcquired {
 			return fmt.Errorf("Lock already acquire, call 'renew' to extend a lock")
 		}
-		_, err := containerURL.AcquireLease(lockInstance.ctx, lockInstance.LockID.String(), int32(lockTTL.Seconds()), azblob.HTTPAccessConditions{})
+
+		_, err = lockInstance.blobURL.AcquireLease(lockInstance.ctx, lockInstance.LockID.String(), int32(lockTTL.Seconds()), azblob.HTTPAccessConditions{})
 		if err != nil {
 			return err
 		}
@@ -245,7 +260,7 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 		if lockInstance.used {
 			return fmt.Errorf("Lock instance already used, cannot be reused")
 		}
-		_, err := containerURL.RenewLease(lockInstance.ctx, lockInstance.LockID.String(), azblob.HTTPAccessConditions{})
+		_, err := lockInstance.blobURL.RenewLease(lockInstance.ctx, lockInstance.LockID.String(), azblob.HTTPAccessConditions{})
 		if err != nil {
 			return err
 		}
