@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Azure/azure-storage-blob-go/2016-05-31/azblob"
@@ -30,6 +31,7 @@ type (
 		unlockContext func(context.Context) error // Used by 'UnlockWhenCancelled' behavior to pass temporary context to unlock
 		cancel        context.CancelFunc          // Cancel is used internally to exit goRoutines of behaviors
 		blobURL       azblob.BlobURL              // URL of the blob used for this lock
+		internalMutex sync.Mutex                  // This is used to prevent multi threaded issues when updating 'used' and 'lockAcquired'
 
 		// LockTTL is the duration for which the lock is to be held
 		// Valid options: 15sec -> 60sec due to Azure Blob https://docs.microsoft.com/en-us/rest/api/storageservices/lease-container
@@ -58,7 +60,14 @@ type (
 )
 
 var (
+	// defaultLockBehaviors are the behaviors which are used when no behavior parameters are provided
 	defaultLockBehaviors = []BehaviorFunc{AutoRenewLock, PanicOnLostLock, UnlockWhenContextCancelled, RetryObtainingLock}
+
+	// azBlobRetryOptions are the default retry settings used for the azure storage calls
+	azBlobRetryOptions = azblob.RetryOptions{
+		Policy:   azblob.RetryPolicyExponential,
+		MaxTries: 3,
+	}
 
 	// AutoRenewLock configures the lock to autorenew itself
 	AutoRenewLock = BehaviorFunc(func(l *Lock) *Lock {
@@ -186,7 +195,7 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 
 	// Create a ContainerURL object to a container
 	u, _ := url.Parse(fmt.Sprintf("%s/%s", storageAccountURL, lockContainerName))
-	containerURL := azblob.NewContainerURL(*u, azblob.NewPipeline(creds, azblob.PipelineOptions{}))
+	containerURL := azblob.NewContainerURL(*u, azblob.NewPipeline(creds, azblob.PipelineOptions{Retry: azBlobRetryOptions}))
 
 	_, err = containerURL.Create(ctxParent, nil, azblob.PublicAccessNone)
 	// Create will return a '409' response code if the container already exists
@@ -198,7 +207,7 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 	}
 
 	// Create a blob, we use leases on the blob to implement the lock
-	blobURL := containerURL.NewBlobURL(lockName)
+	blobURL := containerURL.NewBlobURL(lockBlobNamePrefix + lockName)
 
 	// Upload an empty blob
 	buf := bytes.NewReader([]byte{})
@@ -232,6 +241,9 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 	// it accepts a context to allow locks to be unlocked
 	// even after a context has been cancelled
 	lockInstance.unlockContext = func(ctx context.Context) error {
+		lockInstance.internalMutex.Lock()
+		defer lockInstance.internalMutex.Unlock()
+
 		if !lockInstance.lockAcquired {
 			return fmt.Errorf("Lock not acquired, can't unlock")
 		}
@@ -257,6 +269,9 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 	}
 
 	lockInstance.Lock = func() error {
+		lockInstance.internalMutex.Lock()
+		defer lockInstance.internalMutex.Unlock()
+
 		if lockInstance.used {
 			return fmt.Errorf("Lock instance already unlocked, cannot be reused")
 		}
@@ -275,6 +290,9 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 	}
 
 	lockInstance.Renew = func() error {
+		lockInstance.internalMutex.Lock()
+		defer lockInstance.internalMutex.Unlock()
+
 		if !lockInstance.lockAcquired {
 			return fmt.Errorf("Lock not acquired, can't renew")
 		}
