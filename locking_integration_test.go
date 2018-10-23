@@ -351,6 +351,49 @@ func TestLockingEnd2End_LockRetry(t *testing.T) {
 	}
 }
 
+func TestLockingEnd2End_WrongStorageUrl(t *testing.T) {
+	randLockName := RandomName(10)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, err := NewLockInstance(ctx,
+		"https://storageaccount.com/", "somekey",
+		randLockName, time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
+
+	if err == nil {
+		t.Error("Expected an error but got nil")
+		return
+	}
+
+	t.Log(err)
+}
+
+func TestLockingEnd2End_WrongStorageKey(t *testing.T) {
+	randLockName := RandomName(10)
+
+	err := godotenv.Load()
+	if err != nil {
+		t.Log("No .env file found")
+	}
+
+	accountName := os.Getenv("AZURE_STORAGE_NAME")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, err = NewLockInstance(ctx,
+		accountName, "somekey",
+		randLockName, time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
+
+	if err == nil {
+		t.Error("Expected an error but got nil")
+		return
+	}
+
+	t.Log(err)
+}
+
 func newLockTestHelper(ctx context.Context, lockName string, lockTTL time.Duration, behavior ...BehaviorFunc) (*Lock, error) {
 	accountName := os.Getenv("AZURE_STORAGE_NAME")
 	accountKey := os.Getenv("AZURE_STORAGE_KEY")

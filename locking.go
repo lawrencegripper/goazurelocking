@@ -3,6 +3,7 @@ package locking
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -173,7 +174,6 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 	if valid, err := IsValidLockName(lockName); !valid {
 		return nil, err
 	}
-
 	storageAccountURLParsed, err := url.Parse(storageAccountURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse storageAccountUrl, err: %+v", err)
@@ -183,6 +183,9 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 	}
 	if storageAccountURLParsed.Path != "" {
 		return nil, fmt.Errorf("storageAccountURL should be to the root of the storage account Expect: 'https://mystorageaccount.blob.core.windows.net' Got: %s", storageAccountURL)
+	}
+	if _, err = base64.StdEncoding.DecodeString(storageAccountKey); err != nil {
+		return nil, fmt.Errorf("accountKey isn't valid base64 value - must be valid base64")
 	}
 	// Extract the accountname from the storage URL
 	// for example 'https://mystorageaccount.blob.core.windows.net' -> 'mystorageaccount'
@@ -198,12 +201,16 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 	containerURL := azblob.NewContainerURL(*u, azblob.NewPipeline(creds, azblob.PipelineOptions{Retry: azBlobRetryOptions}))
 
 	_, err = containerURL.Create(ctxParent, nil, azblob.PublicAccessNone)
-	// Create will return a '409' response code if the container already exists
-	// we only error on other conditions as it's expected that a lock of this
+	// Create will return a ServiceCode of "ContainerAlreadyExists" if the container already exists
+	// we only error on other conditions as it's expected that a container of this
 	// name may already exist
 	errResponse, isReponseError := err.(azblob.StorageError)
-	if err != nil && !isReponseError && errResponse.ServiceCode() != azblob.ServiceCodeContainerAlreadyExists {
-		return nil, err
+	if err != nil {
+		if !isReponseError {
+			return nil, err
+		} else if errResponse.ServiceCode() != azblob.ServiceCodeContainerAlreadyExists {
+			return nil, err
+		}
 	}
 
 	// Create a blob, we use leases on the blob to implement the lock
