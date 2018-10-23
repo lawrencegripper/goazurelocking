@@ -42,6 +42,14 @@
   version = "v1.3.0"
 
 [[projects]]
+  branch = "lg/ignorehttpkeepalive"
+  digest = "1:62f4994ad20789aad173c5e933553fba3e241fd26292f96309f9cd0cf9d3f8e9"
+  name = "github.com/lawrencegripper/leaktest"
+  packages = ["."]
+  pruneopts = "UT"
+  revision = "6dc7cf5f29678ea50142c0c8f28d15995ca86e82"
+
+[[projects]]
   digest = "1:274f67cb6fed9588ea2521ecdac05a6d62a8c51c074c1fccc6a49a40ba80e925"
   name = "github.com/satori/go.uuid"
   packages = ["."]
@@ -65,6 +73,7 @@
     "github.com/cenkalti/backoff",
     "github.com/fortytw2/leaktest",
     "github.com/joho/godotenv",
+    "github.com/lawrencegripper/leaktest",
     "github.com/satori/go.uuid",
   ]
   solver-name = "gps-cdcl"

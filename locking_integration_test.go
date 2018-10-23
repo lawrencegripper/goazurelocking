@@ -2,12 +2,13 @@ package locking
 
 import (
 	"context"
+	"math/rand"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/fortytw2/leaktest"
 	"github.com/joho/godotenv"
+	"github.com/lawrencegripper/leaktest"
 )
 
 func TestLockingEnd2End_Simple(t *testing.T) {
@@ -17,6 +18,8 @@ func TestLockingEnd2End_Simple(t *testing.T) {
 	}
 	defer leaktest.Check(t)()
 
+	randLockName := RandomName(10)
+
 	err := godotenv.Load()
 	if err != nil {
 		t.Log("No .env file found")
@@ -24,7 +27,7 @@ func TestLockingEnd2End_Simple(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	lock, err := NewLockTestHelper(ctx, "simple", time.Duration(time.Second*15), AutoRenewLock)
+	lock, err := newLockTestHelper(ctx, randLockName, time.Duration(time.Second*15), AutoRenewLock)
 	if err != nil {
 		t.Error(err)
 		return
@@ -37,7 +40,7 @@ func TestLockingEnd2End_Simple(t *testing.T) {
 	t.Logf("Acquired lease: %s", lock.LockID.String())
 
 	// Attempt to take another lock of the same name
-	duplicateLock, err := NewLockTestHelper(ctx, "simple", time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
+	duplicateLock, err := newLockTestHelper(ctx, randLockName, time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
 	if err != nil {
 		t.Error(err)
 		return
@@ -58,6 +61,7 @@ func TestLockingEnd2End_Simple(t *testing.T) {
 	err = duplicateLock.Lock()
 	if err != nil {
 		t.Error("Expected duplicate lock to get lock but this failed")
+		t.Error(err)
 	}
 }
 
@@ -67,6 +71,8 @@ func TestLockingEnd2End_UnlockOrRenewWithoutLocking(t *testing.T) {
 		return
 	}
 
+	randLockName := RandomName(10)
+
 	err := godotenv.Load()
 	if err != nil {
 		t.Log("No .env file found")
@@ -74,12 +80,12 @@ func TestLockingEnd2End_UnlockOrRenewWithoutLocking(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	lock, err := NewLockTestHelper(ctx, "simple", time.Duration(time.Second*15), AutoRenewLock)
+	lock, err := newLockTestHelper(ctx, randLockName, time.Duration(time.Second*15), AutoRenewLock)
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	defer lock.Cancel()
+	defer lock.Unlock()
 
 	// Release original lock and check error is returned
 	err = lock.Unlock()
@@ -104,6 +110,8 @@ func TestLockingEnd2End_Defaults(t *testing.T) {
 	}
 	defer leaktest.Check(t)()
 
+	randLockName := RandomName(10)
+
 	err := godotenv.Load()
 	if err != nil {
 		t.Log("No .env file found")
@@ -111,7 +119,7 @@ func TestLockingEnd2End_Defaults(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	lock, err := NewLockTestHelper(ctx, "defaults", time.Duration(time.Second*15), defaultLockBehaviors...)
+	lock, err := newLockTestHelper(ctx, randLockName, time.Duration(time.Second*15), defaultLockBehaviors...)
 	if err != nil {
 		t.Error(err)
 		return
@@ -131,7 +139,7 @@ func TestLockingEnd2End_Defaults(t *testing.T) {
 	}
 
 	// Attempt to take another lock of the same name
-	duplicateLock, err := NewLockTestHelper(ctx, "defaults", time.Duration(time.Second*15), defaultLockBehaviors...)
+	duplicateLock, err := newLockTestHelper(ctx, randLockName, time.Duration(time.Second*15), defaultLockBehaviors...)
 	if err != nil {
 		t.Error(err)
 		return
@@ -149,7 +157,9 @@ func TestLockingEnd2End_AutoRenewal(t *testing.T) {
 		t.Log("Skipping integration test as '-short' specified")
 		return
 	}
-	defer leaktest.CheckTimeout(t, time.Duration(time.Second*15))()
+	defer leaktest.Check(t)
+
+	randLockName := RandomName(10)
 
 	err := godotenv.Load()
 	if err != nil {
@@ -158,7 +168,7 @@ func TestLockingEnd2End_AutoRenewal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	lock, err := NewLockTestHelper(ctx, "lock2", time.Duration(time.Second*15), AutoRenewLock, PanicOnLostLock, UnlockWhenContextCancelled)
+	lock, err := newLockTestHelper(ctx, randLockName, time.Duration(time.Second*15), AutoRenewLock, PanicOnLostLock, UnlockWhenContextCancelled)
 	if err != nil {
 		t.Error(err)
 		return
@@ -176,7 +186,7 @@ func TestLockingEnd2End_AutoRenewal(t *testing.T) {
 	time.Sleep(time.Second * 20)
 
 	// Attempt to take another lock of the same name
-	duplicateLock, err := NewLockTestHelper(ctx, "lock2", time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
+	duplicateLock, err := newLockTestHelper(ctx, randLockName, time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
 	if err != nil {
 		t.Error(err)
 		return
@@ -202,7 +212,7 @@ func TestLockingEnd2End_InvalidLockName(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_, err = NewLockTestHelper(ctx, "lock1~~~@@@", time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
+	_, err = newLockTestHelper(ctx, "lock1~~~@@@", time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
 	if err == nil {
 		t.Error("Expected an error but got nil")
 		return
@@ -217,6 +227,8 @@ func TestLockingEnd2End_UseLockTwice(t *testing.T) {
 		return
 	}
 
+	randLockName := RandomName(10)
+
 	err := godotenv.Load()
 	if err != nil {
 		t.Log("No .env file found")
@@ -224,7 +236,7 @@ func TestLockingEnd2End_UseLockTwice(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	lock, err := NewLockTestHelper(ctx, "uselocktwice", time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
+	lock, err := newLockTestHelper(ctx, randLockName, time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
 	if err != nil {
 		t.Error(err)
 		return
@@ -253,6 +265,8 @@ func TestLockingEnd2End_UseUnlockTwice(t *testing.T) {
 		return
 	}
 
+	randLockName := RandomName(10)
+
 	err := godotenv.Load()
 	if err != nil {
 		t.Log("No .env file found")
@@ -260,7 +274,7 @@ func TestLockingEnd2End_UseUnlockTwice(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	lock, err := NewLockTestHelper(ctx, "useunlocktwice", time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
+	lock, err := newLockTestHelper(ctx, randLockName, time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
 	if err != nil {
 		t.Error(err)
 		return
@@ -288,6 +302,9 @@ func TestLockingEnd2End_LockRetry(t *testing.T) {
 		t.Log("Skipping integration test as '-short' specified")
 		return
 	}
+	defer leaktest.Check(t)
+
+	randLockName := RandomName(10)
 
 	err := godotenv.Load()
 	if err != nil {
@@ -297,7 +314,7 @@ func TestLockingEnd2End_LockRetry(t *testing.T) {
 	defer cancel()
 
 	// Acquire a lock without autoRenew: will expire in 15 seconds
-	lock, err := NewLockTestHelper(ctx, "lockretry", time.Duration(time.Second*15), UnlockWhenContextCancelled)
+	lock, err := newLockTestHelper(ctx, randLockName, time.Duration(time.Second*15), UnlockWhenContextCancelled)
 	if err != nil {
 		t.Error(err)
 		return
@@ -312,7 +329,7 @@ func TestLockingEnd2End_LockRetry(t *testing.T) {
 	timeBeforeAttempts := time.Now()
 
 	// Attempt to take another lock of the same name
-	duplicateLock, err := NewLockTestHelper(ctx, "lockretry", time.Duration(time.Second*15), RetryObtainingLock, UnlockWhenContextCancelled)
+	duplicateLock, err := newLockTestHelper(ctx, randLockName, time.Duration(time.Second*15), RetryObtainingLock, UnlockWhenContextCancelled)
 	if err != nil {
 		t.Error(err)
 		return
@@ -334,8 +351,67 @@ func TestLockingEnd2End_LockRetry(t *testing.T) {
 	}
 }
 
-func NewLockTestHelper(ctx context.Context, lockName string, lockTTL time.Duration, behavior ...BehaviorFunc) (*Lock, error) {
+func TestLockingEnd2End_WrongStorageUrl(t *testing.T) {
+	randLockName := RandomName(10)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, err := NewLockInstance(ctx,
+		"https://storageaccount.com/", "somekey",
+		randLockName, time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
+
+	if err == nil {
+		t.Error("Expected an error but got nil")
+		return
+	}
+
+	t.Log(err)
+}
+
+func TestLockingEnd2End_WrongStorageKey(t *testing.T) {
+	randLockName := RandomName(10)
+
+	err := godotenv.Load()
+	if err != nil {
+		t.Log("No .env file found")
+	}
+
+	accountName := os.Getenv("AZURE_STORAGE_NAME")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, err = NewLockInstance(ctx,
+		accountName, "somekey",
+		randLockName, time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
+
+	if err == nil {
+		t.Error("Expected an error but got nil")
+		return
+	}
+
+	t.Log(err)
+}
+
+func newLockTestHelper(ctx context.Context, lockName string, lockTTL time.Duration, behavior ...BehaviorFunc) (*Lock, error) {
 	accountName := os.Getenv("AZURE_STORAGE_NAME")
 	accountKey := os.Getenv("AZURE_STORAGE_KEY")
 	return NewLockInstance(ctx, accountName, accountKey, lockName, lockTTL, behavior...)
+}
+
+var lettersLower = []rune("abcdefghijklmnopqrstuvwxyz")
+
+// RandomName random letter sequence
+func RandomName(n int) string {
+	return randFromSelection(n, lettersLower)
+}
+
+func randFromSelection(length int, choices []rune) string {
+	b := make([]rune, length)
+	rand.Seed(time.Now().UnixNano())
+	for i := range b {
+		b[i] = choices[rand.Intn(len(choices))]
+	}
+	return string(b)
 }

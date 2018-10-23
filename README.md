@@ -12,13 +12,17 @@ Create a `LockInstance` for a lock named `lock1`
 
 ```golang
 
-lock, err := goazurelocking.NewLockInstance(ctx, "azureStorageAccountNameHere", "azureStorageKeyHere", "lock1", time.Duration(time.Second*5))
+lock, err := goazurelocking.NewLockInstance(ctx, "https://azureStorageAccountNameHere.blob.core.windows.net",
+ "azureStorageKeyHere", "lock1", time.Duration(time.Second*5))
 if err != nil {
 	panic(err)
 }
-defer lock.Cancel() // This will 'Unlock' the lock and cleanup go routines running, for example autorenew, on exit. 
+defer lock.Unlock() // This will 'Unlock' the lock and cleanup go routines running, for example autorenew, on exit. 
 
 ```
+
+> Note: The storage account URL should be provided in full, including the `https://`. This allows for the library to be used against Azure Stack (untested). 
+	For a standards storage account this will be `https://THE-ACCOUNT-NAME-HERE.blob.core.windows.net`
 
 Obtain a lock on the `LockInstance` named `lock1` then release it when your done... simple as that!
 
@@ -39,6 +43,9 @@ if err != nil {
    
 ```
 
+> If you look at the storage account your using you'll see a container called `azlockcontainer` under it will be empty blobs for each of the locks you have created. You can 
+	configure [Azure Storage Lifecycle Management](https://azure.microsoft.com/en-us/blog/azure-blob-storage-lifecycle-management-public-preview/) to clear these down periodically
+
 
 ## Advanced
 
@@ -46,7 +53,7 @@ You can define custom behaviors which change how locking behaves, by default the
 
 - PanicOnLostLock: If a lock is lost before being `unlocked` go will panic
 - AutoRenewLocks: Once obtained a lock will be renewed until `unlocked`
-- UnlockWhenContextCancelled: If the context used is canceled a new context is created and an unlock will be attempted
+- UnlockWhenContextCancelled: If the context used is canceled a temporary context is created and an unlock will be attempted. The temporary context is allowed 5sec to complete.
 - RetryObtainingLock: If the lock is held elsewhere the `Lock` func will retry acquiring it for 10x the `LockTTL`
 
 You can create your own and pass them into the `NewLockInstance`. Beware, when you pass in a behavior all default behaviors are ignored. 

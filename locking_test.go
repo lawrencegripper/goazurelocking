@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/lawrencegripper/leaktest"
 )
 
 func TestAutoRenewLockBehavior_Normal(t *testing.T) {
+	defer leaktest.Check(t)()
+
 	renewCalledcount := 0
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -33,6 +37,8 @@ func TestAutoRenewLockBehavior_Normal(t *testing.T) {
 }
 
 func TestAutoRenewLockBehavior_Fail(t *testing.T) {
+	defer leaktest.Check(t)()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -40,7 +46,7 @@ func TestAutoRenewLockBehavior_Fail(t *testing.T) {
 	lockInstance := &Lock{
 		ctx:          ctx,
 		lockAcquired: true,
-		Cancel: func() {
+		cancel: func() {
 			ctxWasCancelled = true
 		},
 		LockTTL: time.Duration(time.Second * 1),
@@ -65,6 +71,8 @@ func TestAutoRenewLockBehavior_Fail(t *testing.T) {
 }
 
 func TestRetryObtainingLockBehavior(t *testing.T) {
+	defer leaktest.Check(t)()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -99,15 +107,18 @@ func TestRetryObtainingLockBehavior(t *testing.T) {
 }
 
 func TestPanicOnLostLock(t *testing.T) {
+	defer leaktest.Check(t)()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	ctxWasCancelled := false
+	unlockWasCalled := false
 	didPanic := false
 	lockInstance := &Lock{
 		ctx: ctx,
-		Cancel: func() {
-			ctxWasCancelled = true
+		Unlock: func() error {
+			unlockWasCalled = true
+			return nil
 		},
 		panic:    func(s string) { didPanic = true },
 		LockTTL:  time.Duration(time.Second * 1),
@@ -127,7 +138,90 @@ func TestPanicOnLostLock(t *testing.T) {
 		t.Error("Expected panic and didn't get one")
 	}
 
-	if !ctxWasCancelled {
-		t.Error("Expect ctx to be cancelled")
+	if !unlockWasCalled {
+		t.Error("Expect `unlock` to be called")
 	}
+}
+
+func TestIsValidLockName(t *testing.T) {
+
+	tests := []struct {
+		name     string
+		lockName string
+		want     bool
+		wantErr  bool
+	}{
+		{
+			name:     "ValidLockName1",
+			lockName: "validlock1",
+			want:     true,
+			wantErr:  false,
+		},
+		{
+			name:     "ValidLockName2_toLowerCaps",
+			lockName: "ValidLock1",
+			want:     true,
+			wantErr:  false,
+		},
+		{
+			name:     "InvalidLockName_Long",
+			lockName: "invalidlock1validlock1validlock1validlock1validlock1validlock",
+			want:     false,
+			wantErr:  true,
+		},
+		{
+			name:     "InvalidLockName_@",
+			lockName: "invalid@lock",
+			want:     false,
+			wantErr:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := IsValidLockName(tt.lockName)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("IsValidLockName() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("IsValidLockName() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInvalidStorageUrl_WithPath(t *testing.T) {
+	randLockName := RandomName(10)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, err := NewLockInstance(ctx,
+		"https://storageaccount.com/someinvalidpath", "somekey",
+		randLockName, time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
+
+	if err == nil {
+		t.Error("Expected an error but got nil")
+		return
+	}
+
+	t.Log(err)
+}
+
+func TestInvalidStorageUrl_WithoutHTTP(t *testing.T) {
+	randLockName := RandomName(10)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, err := NewLockInstance(ctx,
+		"https://storageaccount.com/someinvalidpath", "somekey",
+		randLockName, time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
+
+	if err == nil {
+		t.Error("Expected an error but got nil")
+		return
+	}
+
+	t.Log(err)
 }

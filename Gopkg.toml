@@ -28,11 +28,7 @@
 [prune]
   go-tests = true
   unused-packages = true
-
-[[constraint]]
-  name = "github.com/Azure/azure-sdk-for-go"
-  version = "21.2.0"
-
+  
 [[constraint]]
   name = "github.com/Azure/azure-storage-blob-go"
   version = "0.2.0"
@@ -50,5 +46,7 @@
   version = "2.0.0"
 
 [[constraint]]
-  name = "github.com/fortytw2/leaktest"
-  version = "1.2.0"
+  name = "github.com/lawrencegripper/leaktest"
+  branch = "lg/ignorehttpkeepalive"
+  # PR which ignores HTTPKeepAlives
+  # Todo: move back to "github.com/fortytw2/leaktest" once merged

@@ -1,14 +1,25 @@
 package locking
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/url"
+	"regexp"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/Azure/azure-storage-blob-go/2016-05-31/azblob"
 	"github.com/cenkalti/backoff"
 	"github.com/satori/go.uuid"
+)
+
+const (
+	lockBlobNamePrefix = "azlk-"           // This is appended to the blob containers created by the library
+	lockContainerName  = "azlockcontainer" // This is the name of the container used by the blobs created for locking
+
 )
 
 type (
@@ -19,10 +30,9 @@ type (
 		lockAcquired  bool                        // Set to True when a lock has been acquired
 		panic         func(string)                // Used for testing to allow panic call to be mocked
 		unlockContext func(context.Context) error // Used by 'UnlockWhenCancelled' behavior to pass temporary context to unlock
-
-		// Cancel calls the 'Unlock' method but, when combined with the 'UnlockWhenContextCancelled' behavior, will use a temporary
-		// context will a 5 second deadline to allow the lock to be released even if the parent context has been cancelled.
-		Cancel context.CancelFunc
+		cancel        context.CancelFunc          // Cancel is used internally to exit goRoutines of behaviors
+		blobURL       azblob.BlobURL              // URL of the blob used for this lock
+		internalMutex sync.Mutex                  // This is used to prevent multi threaded issues when updating 'used' and 'lockAcquired'
 
 		// LockTTL is the duration for which the lock is to be held
 		// Valid options: 15sec -> 60sec due to Azure Blob https://docs.microsoft.com/en-us/rest/api/storageservices/lease-container
@@ -51,7 +61,14 @@ type (
 )
 
 var (
+	// defaultLockBehaviors are the behaviors which are used when no behavior parameters are provided
 	defaultLockBehaviors = []BehaviorFunc{AutoRenewLock, PanicOnLostLock, UnlockWhenContextCancelled, RetryObtainingLock}
+
+	// azBlobRetryOptions are the default retry settings used for the azure storage calls
+	azBlobRetryOptions = azblob.RetryOptions{
+		Policy:   azblob.RetryPolicyExponential,
+		MaxTries: 3,
+	}
 
 	// AutoRenewLock configures the lock to autorenew itself
 	AutoRenewLock = BehaviorFunc(func(l *Lock) *Lock {
@@ -69,7 +86,7 @@ var (
 					// Do a renew. If we fail, clean up and notify that the lock is lost
 					err := l.Renew()
 					if err != nil {
-						l.Cancel()
+						l.cancel()
 						l.LockLost <- struct{}{}
 						return
 					}
@@ -128,7 +145,7 @@ var (
 			case <-l.ctx.Done():
 				return
 			case <-l.LockLost:
-				l.Cancel()
+				l.Unlock() //nolint: errcheck
 				l.panic("Lock lost and 'PanicOnLostLock' set")
 			}
 		}()
@@ -137,29 +154,84 @@ var (
 )
 
 // NewLockInstance returns a new instance of a lock
-func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockName string, lockTTL time.Duration, behavior ...BehaviorFunc) (*Lock, error) {
-	if accountKey == "" {
+//
+// Params
+// StorageAccountURL: HTTPS endpoint for your storage account eg. `https://mystorageaccount.blob.core.windows.net` if your account is named `mystorageaccount`
+// StorageAccountKey: The access key for your storage account
+// LockName: An alphanumberic string < 58 chars that will represent your lock.
+// LockTTL: A duration between 15 and 60 seconds for which the lock will be held. Note, by default the `AutoRenew` behavior will renew locks until `Unlock` is called
+//
+// Advanced
+// Behaviors: Funcs which allow you to mutate the lockInstance's behavior. Leave empty for default behavior
+//
+func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccountKey, lockName string, lockTTL time.Duration, behavior ...BehaviorFunc) (*Lock, error) {
+	if storageAccountKey == "" {
 		return nil, fmt.Errorf("Empty accountKey is invalid")
-	}
-	if accountName == "" {
-		return nil, fmt.Errorf("Empty accountName is invalid")
 	}
 	if lockTTL.Seconds() < 15 || lockTTL.Seconds() > 60 {
 		return nil, fmt.Errorf("LockTTL of %v seconds is outside allowed range of 15-60seconds", lockTTL.Seconds())
 	}
+	if valid, err := IsValidLockName(lockName); !valid {
+		return nil, err
+	}
+	storageAccountURLParsed, err := url.Parse(storageAccountURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse storageAccountUrl, err: %+v", err)
+	}
+	if storageAccountURLParsed.Scheme != "https" {
+		return nil, fmt.Errorf("storageAccountURL should be 'https' Expect: 'https://mystorageaccount.blob.core.windows.net' Got: %s", storageAccountURL)
+	}
+	if storageAccountURLParsed.Path != "" {
+		return nil, fmt.Errorf("storageAccountURL should be to the root of the storage account Expect: 'https://mystorageaccount.blob.core.windows.net' Got: %s", storageAccountURL)
+	}
+	if _, err = base64.StdEncoding.DecodeString(storageAccountKey); err != nil {
+		return nil, fmt.Errorf("accountKey isn't valid base64 value - must be valid base64")
+	}
+	// Extract the accountname from the storage URL
+	// for example 'https://mystorageaccount.blob.core.windows.net' -> 'mystorageaccount'
+	accountName, err := extractAccountNameFromURL(storageAccountURLParsed)
+	if err != nil {
+		return nil, err
+	}
 
-	creds := azblob.NewSharedKeyCredential(accountName, accountKey)
+	creds := azblob.NewSharedKeyCredential(accountName, storageAccountKey)
 
 	// Create a ContainerURL object to a container
-	u, _ := url.Parse(fmt.Sprintf("https://%s.blob.core.windows.net/%s", accountName, lockName))
-	containerURL := azblob.NewContainerURL(*u, azblob.NewPipeline(creds, azblob.PipelineOptions{}))
-	_, err := containerURL.Create(ctxParent, nil, azblob.PublicAccessNone)
+	u, _ := url.Parse(fmt.Sprintf("%s/%s", storageAccountURL, lockContainerName))
+	containerURL := azblob.NewContainerURL(*u, azblob.NewPipeline(creds, azblob.PipelineOptions{Retry: azBlobRetryOptions}))
 
-	// Create will return a '409' response code if the container already exists
-	// we only error on other conditions as it's expected that a lock of this
+	_, err = containerURL.Create(ctxParent, nil, azblob.PublicAccessNone)
+	// Create will return a ServiceCode of "ContainerAlreadyExists" if the container already exists
+	// we only error on other conditions as it's expected that a container of this
 	// name may already exist
-	if err != nil && err.(azblob.ResponseError) != nil && err.(azblob.ResponseError).Response().StatusCode != 409 {
-		return nil, err
+	errResponse, isReponseError := err.(azblob.StorageError)
+	if err != nil {
+		if !isReponseError {
+			return nil, err
+		} else if errResponse.ServiceCode() != azblob.ServiceCodeContainerAlreadyExists {
+			return nil, err
+		}
+	}
+
+	// Create a blob, we use leases on the blob to implement the lock
+	blobURL := containerURL.NewBlobURL(lockBlobNamePrefix + lockName)
+
+	// Upload an empty blob
+	buf := bytes.NewReader([]byte{})
+	_, err = blobURL.ToBlockBlobURL().PutBlob(ctxParent, buf, azblob.BlobHTTPHeaders{}, azblob.Metadata{}, azblob.BlobAccessConditions{})
+
+	// It's expected that a lock of this name may already exist
+	// and may already have an active lease BUT for any other
+	// ServiceCodes or errors we should return an error
+	errResponse, isReponseError = err.(azblob.StorageError)
+	if err != nil {
+		if !isReponseError {
+			return nil, err
+		} else if isReponseError &&
+			errResponse.ServiceCode() != azblob.ServiceCodeBlobAlreadyExists &&
+			errResponse.ServiceCode() != azblob.ServiceCodeLeaseIDMissing {
+			return nil, err
+		}
 	}
 
 	// Create our own context which will be cancelled independently of
@@ -168,30 +240,40 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 
 	lockInstance := &Lock{
 		ctx:      ctx,
-		Cancel:   cancel,
+		cancel:   cancel,
+		blobURL:  blobURL,
 		panic:    func(s string) { panic(s) },
 		LockTTL:  lockTTL,
 		LockLost: make(chan struct{}, 1),
 		LockID:   uuid.NewV4(),
 	}
 
+	// This function handles unlocking
+	// it accepts a context to allow locks to be unlocked
+	// even after a context has been cancelled
 	lockInstance.unlockContext = func(ctx context.Context) error {
+		lockInstance.internalMutex.Lock()
+		defer lockInstance.internalMutex.Unlock()
+
 		if !lockInstance.lockAcquired {
 			return fmt.Errorf("Lock not acquired, can't unlock")
+		}
+		if lockInstance.used {
+			return fmt.Errorf("Lock instance already unlocked, cannot call unlock")
+		}
+
+		// No matter what happened cancel the context to close off the go routines running in behaviors
+		defer lockInstance.cancel()
+
+		_, err := lockInstance.blobURL.ReleaseLease(ctx, lockInstance.LockID.String(), azblob.HTTPAccessConditions{})
+
+		if err != nil {
+			return err
 		}
 
 		// Mark this lock instance as used to prevent reuse
 		// as the library doesn't handle multiple uses per lock instance
 		lockInstance.used = true
-
-		// No matter what happened cancel the context to close off the go routines running in behaviors
-		defer lockInstance.Cancel()
-
-		_, err := containerURL.ReleaseLease(ctx, lockInstance.LockID.String(), azblob.HTTPAccessConditions{})
-
-		if err != nil {
-			return err
-		}
 
 		return nil
 	}
@@ -201,13 +283,17 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 	}
 
 	lockInstance.Lock = func() error {
+		lockInstance.internalMutex.Lock()
+		defer lockInstance.internalMutex.Unlock()
+
 		if lockInstance.used {
 			return fmt.Errorf("Lock instance already unlocked, cannot be reused")
 		}
 		if lockInstance.lockAcquired {
 			return fmt.Errorf("Lock already acquire, call 'renew' to extend a lock")
 		}
-		_, err := containerURL.AcquireLease(lockInstance.ctx, lockInstance.LockID.String(), int32(lockTTL.Seconds()), azblob.HTTPAccessConditions{})
+
+		_, err = lockInstance.blobURL.AcquireLease(lockInstance.ctx, lockInstance.LockID.String(), int32(lockTTL.Seconds()), azblob.HTTPAccessConditions{})
 		if err != nil {
 			return err
 		}
@@ -218,13 +304,16 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 	}
 
 	lockInstance.Renew = func() error {
+		lockInstance.internalMutex.Lock()
+		defer lockInstance.internalMutex.Unlock()
+
 		if !lockInstance.lockAcquired {
 			return fmt.Errorf("Lock not acquired, can't renew")
 		}
 		if lockInstance.used {
 			return fmt.Errorf("Lock instance already used, cannot be reused")
 		}
-		_, err := containerURL.RenewLease(lockInstance.ctx, lockInstance.LockID.String(), azblob.HTTPAccessConditions{})
+		_, err := lockInstance.blobURL.RenewLease(lockInstance.ctx, lockInstance.LockID.String(), azblob.HTTPAccessConditions{})
 		if err != nil {
 			return err
 		}
@@ -242,4 +331,30 @@ func NewLockInstance(ctxParent context.Context, accountName, accountKey, lockNam
 	}
 
 	return lockInstance, nil
+}
+
+func extractAccountNameFromURL(u *url.URL) (string, error) {
+	parts := strings.Split(u.Hostname(), ".")
+	if len(parts) < 1 {
+		return "", fmt.Errorf("couldn't extract accountname from: %s", u.String())
+	}
+	return parts[0], nil
+}
+
+// validLockNameRegex is a regex used to check the chars are valid as an Azure Storage container name
+var validLockNameRegex = regexp.MustCompile("^[a-z0-9]+(-[a-z0-9]+)*$")
+
+// IsValidLockName checks if the lock name is between 3-58 (63 minus 5char prefix used) characters long
+// and matches this regex @"^[a-z0-9]+(-[a-z0-9]+)*$"
+func IsValidLockName(lockName string) (bool, error) {
+	lockName = strings.ToLower(lockName)
+	if len(lockName) < 3 || len(lockName) > 58 {
+		return false, fmt.Errorf("lock name: %s must be between 3 and 58 characters long", lockName)
+	}
+
+	if !validLockNameRegex.MatchString(lockName) {
+		return false, fmt.Errorf("lock name: %s must be alphanumberic with no characters other than '-' (regex '^[a-z0-9]+(-[a-z0-9]+)*$')", lockName)
+	}
+
+	return true, nil
 }
