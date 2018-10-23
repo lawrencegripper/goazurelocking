@@ -222,12 +222,16 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 
 	// It's expected that a lock of this name may already exist
 	// and may already have an active lease BUT for any other
-	// ServiceCodes we should return an error
+	// ServiceCodes or errors we should return an error
 	errResponse, isReponseError = err.(azblob.StorageError)
-	if err != nil && isReponseError &&
-		errResponse.ServiceCode() != azblob.ServiceCodeBlobAlreadyExists &&
-		errResponse.ServiceCode() != azblob.ServiceCodeLeaseIDMissing {
-		return nil, err
+	if err != nil {
+		if !isReponseError {
+			return nil, err
+		} else if isReponseError &&
+			errResponse.ServiceCode() != azblob.ServiceCodeBlobAlreadyExists &&
+			errResponse.ServiceCode() != azblob.ServiceCodeLeaseIDMissing {
+			return nil, err
+		}
 	}
 
 	// Create our own context which will be cancelled independently of
