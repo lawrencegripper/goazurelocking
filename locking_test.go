@@ -189,3 +189,39 @@ func TestIsValidLockName(t *testing.T) {
 		})
 	}
 }
+
+func TestInvalidStorageUrl_WithPath(t *testing.T) {
+	randLockName := RandomName(10)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, err := NewLockInstance(ctx,
+		"https://storageaccount.com/someinvalidpath", "somekey",
+		randLockName, time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
+
+	if err == nil {
+		t.Error("Expected an error but got nil")
+		return
+	}
+
+	t.Log(err)
+}
+
+func TestInvalidStorageUrl_WithoutHTTP(t *testing.T) {
+	randLockName := RandomName(10)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, err := NewLockInstance(ctx,
+		"https://storageaccount.com/someinvalidpath", "somekey",
+		randLockName, time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
+
+	if err == nil {
+		t.Error("Expected an error but got nil")
+		return
+	}
+
+	t.Log(err)
+}

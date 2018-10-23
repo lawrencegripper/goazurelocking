@@ -227,6 +227,8 @@ func TestLockingEnd2End_UseLockTwice(t *testing.T) {
 		return
 	}
 
+	randLockName := RandomName(10)
+
 	err := godotenv.Load()
 	if err != nil {
 		t.Log("No .env file found")
@@ -234,7 +236,7 @@ func TestLockingEnd2End_UseLockTwice(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	lock, err := newLockTestHelper(ctx, "uselocktwice", time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
+	lock, err := newLockTestHelper(ctx, randLockName, time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
 	if err != nil {
 		t.Error(err)
 		return
@@ -263,6 +265,8 @@ func TestLockingEnd2End_UseUnlockTwice(t *testing.T) {
 		return
 	}
 
+	randLockName := RandomName(10)
+
 	err := godotenv.Load()
 	if err != nil {
 		t.Log("No .env file found")
@@ -270,7 +274,7 @@ func TestLockingEnd2End_UseUnlockTwice(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	lock, err := newLockTestHelper(ctx, "useunlocktwice", time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
+	lock, err := newLockTestHelper(ctx, randLockName, time.Duration(time.Second*15), AutoRenewLock, UnlockWhenContextCancelled)
 	if err != nil {
 		t.Error(err)
 		return

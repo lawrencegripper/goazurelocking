@@ -170,7 +170,10 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 		return nil, fmt.Errorf("failed to parse storageAccountUrl, err: %+v", err)
 	}
 	if storageAccountURLParsed.Scheme != "https" {
-		return nil, fmt.Errorf("storageAccountURL should be 'https' eg. 'https://mystorageaccount.blob.core.windows.net'")
+		return nil, fmt.Errorf("storageAccountURL should be 'https' Expect: 'https://mystorageaccount.blob.core.windows.net' Got: %s", storageAccountURL)
+	}
+	if storageAccountURLParsed.Path != "" {
+		return nil, fmt.Errorf("storageAccountURL should be to the root of the storage account Expect: 'https://mystorageaccount.blob.core.windows.net' Got: %s", storageAccountURL)
 	}
 	// Extract the accountname from the storage URL
 	// for example 'https://mystorageaccount.blob.core.windows.net' -> 'mystorageaccount'
