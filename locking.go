@@ -258,10 +258,9 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 		if !lockInstance.lockAcquired {
 			return fmt.Errorf("Lock not acquired, can't unlock")
 		}
-
-		// Mark this lock instance as used to prevent reuse
-		// as the library doesn't handle multiple uses per lock instance
-		lockInstance.used = true
+		if lockInstance.used {
+			return fmt.Errorf("Lock instance already unlocked, cannot call unlock")
+		}
 
 		// No matter what happened cancel the context to close off the go routines running in behaviors
 		defer lockInstance.cancel()
@@ -271,6 +270,10 @@ func NewLockInstance(ctxParent context.Context, storageAccountURL, storageAccoun
 		if err != nil {
 			return err
 		}
+
+		// Mark this lock instance as used to prevent reuse
+		// as the library doesn't handle multiple uses per lock instance
+		lockInstance.used = true
 
 		return nil
 	}
